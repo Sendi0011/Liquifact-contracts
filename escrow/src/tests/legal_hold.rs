@@ -48,7 +48,7 @@ fn init_open(
         &None,
         &None,
         &None,
-        &None
+        &None,
     );
     (token, treasury)
 }
@@ -93,7 +93,7 @@ fn init_settled<'a>(
         &None,
         &None,
         &None,
-        &None
+        &None,
     );
     client.fund(investor, &TARGET);
     client.settle();

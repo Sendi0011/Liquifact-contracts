@@ -60,10 +60,12 @@ Emitted by `init()`. Marks the beginning of an invoice escrow lifecycle.
 | `funding_token` | `Address` | Bound SEP-41 token; equals `DataKey::FundingToken` |
 | `treasury` | `Address` | Bound treasury; equals `DataKey::Treasury` |
 | `registry` | `Option<Address>` | Optional registry hint; equals `DataKey::RegistryRef` (`None` when unset) |
+| `has_maturity_lock` | `bool` | `true` when `escrow.maturity > 0`; `false` means `maturity == 0` and settlement has no maturity time lock |
 
 **Compatibility:** Additive fields on `EscrowInitialized` — old indexers may ignore
-`funding_token`, `treasury`, and `registry`; new indexers can bootstrap bound references
-from this single event without follow-up `get_funding_token` / `get_treasury` polls.
+`funding_token`, `treasury`, `registry`, and `has_maturity_lock`; new indexers can
+bootstrap bound references and maturity-lock state from this single event without
+follow-up `get_funding_token` / `get_treasury` / summary polls.
 
 #### Nested `InvoiceEscrow` fields (within `escrow`)
 
@@ -97,7 +99,8 @@ storage section for the canonical persisted-layout discussion.
   "status"        : 0,
   "funding_token" : "CTOKEN...",
   "treasury"      : "GTREAS...",
-  "registry"      : null
+  "registry"      : null,
+  "has_maturity_lock": true
 }
 ```
 

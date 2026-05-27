@@ -33,6 +33,9 @@ if escrow.maturity > 0 {
 - The comparison is `>=` (inclusive boundary).
 - When `maturity == 0`, the gate is skipped — no time lock.
 - Maturity is stored as a raw `u64` of seconds.
+- `has_maturity_lock()` and `get_escrow_summary().has_maturity_lock`
+  surface this explicitly: `false` means `maturity == 0` and settlement is
+  not time-gated.
 
 ### 2. `claim_investor_payout` — Commitment Lock
 
@@ -157,6 +160,24 @@ env.ledger().set_timestamp(4999); // with_mut variant also valid
 env.ledger().set_timestamp(5000);
 // settle() succeeds — exactly at maturity
 ```
+
+### Zero Maturity Means No Settlement Time Lock
+
+`maturity = 0` is not "midnight" or an unset future timestamp. It is the
+contract's explicit no-lock mode:
+
+```rust
+assert!(!client.has_maturity_lock());
+assert!(!client.get_escrow_summary().has_maturity_lock);
+
+// After funding, SME settlement is allowed immediately unless legal hold or
+// another status/auth guard blocks the call.
+client.settle();
+```
+
+Operators who expect a settlement delay must deploy with a positive ledger
+timestamp and should confirm `has_maturity_lock == true` in the
+`EscrowInitialized` event or read API before accepting investor deposits.
 
 ---
 

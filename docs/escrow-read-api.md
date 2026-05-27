@@ -72,6 +72,17 @@ Returns `true` when a compliance hold is active. Defaults to `false` when the ke
 
 ---
 
+## `has_maturity_lock() → bool`
+
+Derived from `DataKey::Escrow.maturity`.
+
+Returns `true` when `maturity > 0` and `settle()` is gated by
+`Env::ledger().timestamp() >= maturity`. Returns `false` when `maturity == 0`,
+which means there is no maturity time lock and a funded escrow can settle
+immediately if SME auth, status, and legal-hold checks pass.
+
+---
+
 ## `get_min_contribution_floor() → i128`
 
 **Storage key:** `DataKey::MinContributionFloor`
@@ -186,6 +197,7 @@ Bundles multiple read-only values in a single host invocation, optimizing read l
 A `#[contracttype]` struct containing:
 
 - `escrow: InvoiceEscrow` — The full escrow snapshot.
+- `has_maturity_lock: bool` — True when `escrow.maturity > 0`; false means `maturity == 0` and settlement has no maturity time lock.
 - `legal_hold: bool` — True if a compliance hold is active.
 - `funding_close_snapshot: EscrowCloseSnapshot` — Custom option-like representation of the captured pro-rata denominator snapshot (detailed below).
 - `unique_funder_count: u32` — Distinct address count of contributors.
@@ -198,4 +210,3 @@ A `#[contracttype]` enum representing the optional `FundingCloseSnapshot`:
 
 - `None` — Escrow is not yet funded; no close snapshot exists.
 - `Some(FundingCloseSnapshot)` — The pro-rata denominator snapshot captured when the escrow first transitioned to **funded**.
-

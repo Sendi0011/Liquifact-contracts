@@ -24,6 +24,7 @@ use soroban_sdk::{
 mod admin;
 mod attestations;
 mod cap_validation;
+mod coverage;
 mod external_calls;
 mod external_calls_mocked;
 mod funding;
@@ -109,7 +110,7 @@ pub fn default_init(client: &LiquifactEscrowClient<'_>, env: &Env, admin: &Addre
         &None,
         &None,
         &None,
-        &None
+        &None,
     );
 }
 

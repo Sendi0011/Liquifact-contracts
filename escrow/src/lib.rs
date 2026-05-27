@@ -150,20 +150,18 @@ pub const MAX_DUST_SWEEP_AMOUNT: i128 = 100_000_000;
 pub const MAX_INVOICE_ID_STRING_LEN: u32 = 32;
 
 /// Minimum instance storage TTL extension horizon for time-sensitive escrow entries.
-
 ///
 /// `bump_ttl` extends instance-storage entries to avoid rent/archival edge cases when
 /// maturity/claim locks are far in the future.
 ///
 /// Named as a constant so operators can reason about and audit the threshold.
-pub const INSTANCE_TTL_MIN_EXTENSION_SECS: u64 = 60 * 60; // 1h
+pub const INSTANCE_TTL_MIN_EXTENSION_LEDGERS: u32 = 60 * 60; // Approx. 1h at 1 ledger/sec.
 
 /// Minimum persistent storage TTL extension horizon for per-investor allowlist entries.
 ///
 /// When the escrow uses the allowlist gate, investor funding depends on persistent entries.
 /// Extending persistent allowlist TTL reduces the risk of silent allowlist disablement.
-pub const PERSISTENT_TTL_MIN_EXTENSION_SECS: u64 = 60 * 60; // 1h
-
+pub const PERSISTENT_TTL_MIN_EXTENSION_LEDGERS: u32 = 60 * 60; // Approx. 1h at 1 ledger/sec.
 
 // --- Storage keys ---
 
@@ -340,6 +338,8 @@ pub enum EscrowCloseSnapshot {
 pub struct EscrowSummary {
     /// Full escrow snapshot.
     pub escrow: InvoiceEscrow,
+    /// True when `escrow.maturity > 0`; false means settlement has no maturity time lock.
+    pub has_maturity_lock: bool,
     /// Active legal or compliance hold flag.
     pub legal_hold: bool,
     /// The captured funding close snapshot (Option).
@@ -365,6 +365,8 @@ pub struct EscrowInitialized {
     pub treasury: Address,
     /// Optional registry hint; equals [`DataKey::RegistryRef`] (`None` when unset).
     pub registry: Option<Address>,
+    /// False when `escrow.maturity == 0`, which means `settle` has no maturity time lock.
+    pub has_maturity_lock: bool,
 }
 
 #[contractevent]
@@ -640,6 +642,10 @@ impl LiquifactEscrow {
     /// The funding token and treasury addresses are **immutable** after this call; the registry id is
     /// optional metadata for off-chain indexers (not an on-chain authority).
     ///
+    /// `maturity == 0` is an explicit "no maturity lock" configuration: once funded, the SME may
+    /// call [`LiquifactEscrow::settle`] immediately. Positive maturity values are validator-observed
+    /// ledger timestamps and are enforced with an inclusive `ledger.timestamp() >= maturity` check.
+    ///
     /// `invoice_id` must satisfy [`MAX_INVOICE_ID_STRING_LEN`] and charset rules (see
     /// [`validate_invoice_id_string`]).
     ///
@@ -752,6 +758,7 @@ impl LiquifactEscrow {
             funding_token: Self::get_funding_token(env.clone()),
             treasury: Self::get_treasury(env.clone()),
             registry: Self::get_registry_ref(env.clone()),
+            has_maturity_lock: Self::has_maturity_lock(env.clone()),
         }
         .publish(&env);
 
@@ -787,6 +794,16 @@ impl LiquifactEscrow {
     /// proof of registry membership — query the registry contract directly to verify on-chain state.
     pub fn get_registry_ref(env: Env) -> Option<Address> {
         env.storage().instance().get(&DataKey::RegistryRef)
+    }
+
+    /// Return whether this escrow has a configured maturity time lock.
+    ///
+    /// `true` means [`InvoiceEscrow::maturity`] is positive and [`LiquifactEscrow::settle`] requires
+    /// `Env::ledger().timestamp() >= maturity`. `false` means `maturity == 0`: there is no maturity
+    /// gate, so a funded escrow can be settled immediately by the SME, subject to legal-hold and
+    /// status guards.
+    pub fn has_maturity_lock(env: Env) -> bool {
+        Self::get_escrow(env).maturity > 0
     }
 
     /// Move up to `amount` (capped by balance and [`MAX_DUST_SWEEP_AMOUNT`]) of the **funding token**
@@ -899,9 +916,7 @@ impl LiquifactEscrow {
     /// Optional cap on total principal for a single investor address.
     /// Absent ⇒ unlimited. Enforced on every deposit.
     pub fn get_max_per_investor_cap(env: Env) -> Option<i128> {
-        env.storage()
-            .instance()
-            .get(&DataKey::MaxPerInvestorCap)
+        env.storage().instance().get(&DataKey::MaxPerInvestorCap)
     }
 
     /// Distinct funders counted so far (each address counted once when it first receives principal).
@@ -923,7 +938,7 @@ impl LiquifactEscrow {
         let funding_close_snapshot_opt = Self::get_funding_close_snapshot(env.clone());
         let unique_funder_count = Self::get_unique_funder_count(env.clone());
         let is_allowlist_active = Self::is_allowlist_active(env.clone());
-        let schema_version = Self::get_version(env);
+        let schema_version = Self::get_version(env.clone());
 
         let funding_close_snapshot = match funding_close_snapshot_opt {
             Some(snap) => EscrowCloseSnapshot::Some(snap),
@@ -932,6 +947,7 @@ impl LiquifactEscrow {
 
         EscrowSummary {
             escrow,
+            has_maturity_lock: Self::has_maturity_lock(env.clone()),
             legal_hold,
             funding_close_snapshot,
             unique_funder_count,
@@ -1195,7 +1211,7 @@ impl LiquifactEscrow {
         let n = investors.len();
         assert!(n > 0, "investors vector must be non-empty");
         assert!(
-            (n as u32) <= MAX_INVESTOR_ALLOWLIST_BATCH,
+            n <= MAX_INVESTOR_ALLOWLIST_BATCH,
             "investors vector length exceeds MAX_INVESTOR_ALLOWLIST_BATCH"
         );
 
@@ -1257,6 +1273,54 @@ impl LiquifactEscrow {
         .publish(&env);
 
         escrow
+    }
+
+    /// Lower the configured distinct-investor cap while the escrow is still open.
+    ///
+    /// This is admin-only and intentionally cannot raise a cap or impose one on an unlimited
+    /// escrow. Existing investors remain able to add principal after the cap is lowered; only new
+    /// investor addresses are blocked once `UniqueFunderCount >= new_cap`.
+    ///
+    /// # Panics
+    /// - If the escrow is not open.
+    /// - If no unique-investor cap was configured at initialization.
+    /// - If `new_cap` is not strictly lower than the current cap.
+    /// - If `new_cap` is below the current unique funder count.
+    pub fn lower_max_unique_investors(env: Env, new_cap: u32) -> u32 {
+        let escrow = Self::get_escrow(env.clone());
+        escrow.admin.require_auth();
+
+        assert!(escrow.status == 0, "Cap can only be lowered in Open state");
+
+        let old_cap: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MaxUniqueInvestorsCap)
+            .unwrap_or_else(|| panic!("no investor cap configured"));
+        let unique_count = Self::get_unique_funder_count(env.clone());
+
+        assert!(
+            new_cap < old_cap,
+            "new cap must be strictly lower than current cap"
+        );
+        assert!(
+            new_cap >= unique_count,
+            "new cap cannot be below current unique funder count"
+        );
+
+        env.storage()
+            .instance()
+            .set(&DataKey::MaxUniqueInvestorsCap, &new_cap);
+
+        MaxUniqueInvestorsCapLowered {
+            name: symbol_short!("inv_cap"),
+            invoice_id: escrow.invoice_id.clone(),
+            old_cap,
+            new_cap,
+        }
+        .publish(&env);
+
+        new_cap
     }
 
     /// Validate the stored schema version and apply a migration if one is implemented.
@@ -1483,9 +1547,6 @@ impl LiquifactEscrow {
             }
         }
 
-        let next_contribution = prev
-            .checked_add(amount)
-            .expect("investor contribution overflow");
         env.storage()
             .instance()
             .set(&contribution_key, &new_contribution);
@@ -1524,8 +1585,13 @@ impl LiquifactEscrow {
     /// withdrawn (3) escrows reject the call.
     ///
     /// # Maturity gate
-    /// If [`InvoiceEscrow::maturity`] > 0, settlement is further gated on the ledger timestamp
-    /// reaching `maturity`. A zero maturity means no time gate.
+    /// If [`InvoiceEscrow::maturity`] > 0, settlement is further gated on validator-observed
+    /// ledger time using an inclusive integer-second boundary:
+    /// `Env::ledger().timestamp() >= maturity`.
+    ///
+    /// A zero maturity is intentionally treated as **no maturity lock**. In that configuration a
+    /// funded escrow can settle immediately after SME auth passes, unless another guard such as
+    /// legal hold blocks settlement.
     pub fn settle(env: Env) -> InvoiceEscrow {
         assert!(
             !Self::legal_hold_active(&env),
@@ -1795,55 +1861,28 @@ impl LiquifactEscrow {
         // - ADR-007: storage key evolution policy (additive changes / key semantics).
         // - docs/escrow-ledger-time.md: all gating uses `Env::ledger().timestamp()` with `>=`.
 
-        // Instance storage keys required for settlement + gating behavior.
-        let k_escrow: DataKey = DataKey::Escrow;
-        env.storage().instance().extend_ttl(&k_escrow, &INSTANCE_TTL_MIN_EXTENSION_SECS);
+        env.storage().instance().extend_ttl(
+            INSTANCE_TTL_MIN_EXTENSION_LEDGERS,
+            INSTANCE_TTL_MIN_EXTENSION_LEDGERS,
+        );
 
-        let k_version: DataKey = DataKey::Version;
-        env.storage().instance().extend_ttl(&k_version, &INSTANCE_TTL_MIN_EXTENSION_SECS);
-
-        let k_legal_hold: DataKey = DataKey::LegalHold;
-        env.storage().instance().extend_ttl(&k_legal_hold, &INSTANCE_TTL_MIN_EXTENSION_SECS);
-
-        let k_allowlist_active: DataKey = DataKey::AllowlistActive;
-        env.storage()
-            .instance()
-            .extend_ttl(&k_allowlist_active, &INSTANCE_TTL_MIN_EXTENSION_SECS);
-
-        let k_snapshot: DataKey = DataKey::FundingCloseSnapshot;
-        env.storage()
-            .instance()
-            .extend_ttl(&k_snapshot, &INSTANCE_TTL_MIN_EXTENSION_SECS);
-
-        // Investor contribution + claim gates are instance keys (per investor).
-        // We cannot enumerate contributors on-chain; extend only what the caller provides.
-        for addr in allowlisted.iter() {
-            // Contribution + claim-gate entries are instance-scoped and per-investor.
-            let k_contrib = DataKey::InvestorContribution(addr.clone());
-            env.storage()
-                .instance()
-                .extend_ttl(&k_contrib, &INSTANCE_TTL_MIN_EXTENSION_SECS);
-
-            let k_claim_not_before = DataKey::InvestorClaimNotBefore(addr.clone());
-            env.storage()
-                .instance()
-                .extend_ttl(&k_claim_not_before, &INSTANCE_TTL_MIN_EXTENSION_SECS);
-        }
-
+        // Instance storage TTL is contract-wide under Soroban SDK 25. The call above covers
+        // Escrow, Version, LegalHold, snapshots, and all per-investor instance keys.
 
         // Persistent allowlist entries.
         for addr in allowlisted.iter() {
             let k = DataKey::InvestorAllowlisted(addr.clone());
-            env.storage()
-                .persistent()
-                .extend_ttl(&k, &PERSISTENT_TTL_MIN_EXTENSION_SECS);
+            env.storage().persistent().extend_ttl(
+                &k,
+                PERSISTENT_TTL_MIN_EXTENSION_LEDGERS,
+                PERSISTENT_TTL_MIN_EXTENSION_LEDGERS,
+            );
         }
     }
 
     pub fn transfer_admin(env: Env, new_admin: Address) -> InvoiceEscrow {
         // env.clone(): env is used again after this call for storage set and publish.
         let mut escrow = Self::get_escrow(env.clone());
-
 
         escrow.admin.require_auth();
 

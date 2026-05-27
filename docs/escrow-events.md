@@ -28,6 +28,7 @@ indexers can register `funding_token`, `treasury`, and optional `registry` witho
 - `funding_token` (`Address`) — equals `DataKey::FundingToken`
 - `treasury` (`Address`) — equals `DataKey::Treasury`
 - `registry` (`Option<Address>`) — equals `DataKey::RegistryRef`
+- `has_maturity_lock` (`bool`) — false when `maturity == 0`, meaning settlement has no maturity time lock
 
 **Example (JSON Decoded):**
 ```json
@@ -37,7 +38,8 @@ indexers can register `funding_token`, `treasury`, and optional `registry` witho
     "escrow": { "invoice_id": "INV_001", "status": 0 },
     "funding_token": "CTOKEN...",
     "treasury": "GTREAS...",
-    "registry": "GREG..."
+    "registry": "GREG...",
+    "has_maturity_lock": true
   }
 }
 ```
