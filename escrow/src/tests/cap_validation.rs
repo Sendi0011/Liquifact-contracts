@@ -26,6 +26,7 @@ fn test_unique_funder_count_basic_functionality() {
         &None,
         &None,
         &Some(3u32),
+        &None
     );
 
     // Verify initial state
@@ -76,6 +77,7 @@ fn test_cap_enforcement_blocks_excess_investors() {
         &None,
         &None,
         &Some(2u32),
+        &None
     );
 
     // Add two investors — reaches the investor cap but NOT the funding target.
@@ -113,6 +115,7 @@ fn test_re_funding_same_address_doesnt_count_against_cap() {
         &None,
         &None,
         &Some(1u32),
+        &None
     );
 
     let investor = Address::generate(&env);
@@ -152,7 +155,8 @@ fn test_no_cap_allows_unlimited_investors() {
         &Address::generate(&env),
         &None,
         &None,
-        &None, // No cap set
+        &None, // No distinct-investor cap set
+        &None
     );
 
     assert_eq!(client.get_max_unique_investors_cap(), None);
@@ -166,6 +170,65 @@ fn test_no_cap_allows_unlimited_investors() {
 
     assert_eq!(client.get_unique_funder_count(), 5);
     assert_eq!(client.get_escrow().status, 1); // Funded
+}
+
+#[test]
+#[should_panic(expected = "investor contribution exceeds max_per_investor cap")]
+fn test_max_per_investor_cap_blocks_excess_principal() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = deploy(&env);
+    let admin = Address::generate(&env);
+    let sme = Address::generate(&env);
+
+    client.init(
+        &admin,
+        &String::from_str(&env, "CAP_TEST6"),
+        &sme,
+        &100_000_000_000i128,
+        &800i64,
+        &0u64,
+        &Address::generate(&env),
+        &None,
+        &Address::generate(&env),
+        &None,
+        &None,
+        &Some(2u32),
+        &Some(50_000_000_000i128)
+    );
+
+    let inv1 = Address::generate(&env);
+    client.fund(&inv1, &30_000_000_000i128);
+    assert_eq!(client.get_contribution(&inv1), 30_000_000_000i128);
+
+    // Second contribution would exceed the per-investor cap.
+    client.fund(&inv1, &21_000_000_000i128);
+}
+
+#[test]
+#[should_panic(expected = "max_per_investor must be positive when configured")]
+fn test_init_zero_max_per_investor_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = deploy(&env);
+    let admin = Address::generate(&env);
+    let sme = Address::generate(&env);
+
+    client.init(
+        &admin,
+        &String::from_str(&env, "CAP_TEST7"),
+        &sme,
+        &100_000_000_000i128,
+        &800i64,
+        &0u64,
+        &Address::generate(&env),
+        &None,
+        &Address::generate(&env),
+        &None,
+        &None,
+        &Some(2u32),
+        &Some(0i128)
+    );
 }
 
 #[test]
@@ -197,6 +260,7 @@ fn test_cap_with_fund_with_commitment() {
         &Some(tiers),
         &None,
         &Some(2u32),
+        &None
     );
 
     assert_eq!(client.get_unique_funder_count(), 0);

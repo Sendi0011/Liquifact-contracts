@@ -21,6 +21,7 @@ fn test_init_stores_escrow() {
         &None,
         &None,
         &None,
+        &None
     );
     assert_eq!(escrow.invoice_id, symbol_short!("INV001"));
     assert_eq!(escrow.admin, admin);
@@ -50,6 +51,7 @@ fn test_init_stores_keyed_invoice_and_lists_it() {
         &None,
         &None,
         &None,
+        &None
     );
     let got = client.get_escrow();
     assert_eq!(got, escrow);
@@ -72,6 +74,7 @@ fn test_init_requires_admin_auth() {
         &None,
         &None,
         &None,
+        &None
     );
     assert!(
         env.auths().iter().any(|(addr, _)| *addr == admin),
@@ -99,6 +102,7 @@ fn test_init_unauthorized_panics() {
             &None,
             &None,
             &None,
+            &None
         );
     }));
     assert!(result.is_err(), "Expected panic without auth");
@@ -138,6 +142,7 @@ fn test_cost_baseline_init() {
         &None,
         &None,
         &None,
+        &None
     );
 }
 
@@ -158,6 +163,7 @@ fn test_cost_baseline_init_zero_maturity() {
         &None,
         &None,
         &None,
+        &None
     );
 }
 
@@ -178,6 +184,7 @@ fn test_cost_baseline_init_max_amount() {
         &None,
         &None,
         &None,
+        &None
     );
 }
 
@@ -203,6 +210,7 @@ fn test_init_invoice_id_empty_string_panics() {
         &None,
         &None,
         &None,
+        &None
     );
 }
 
@@ -228,6 +236,7 @@ fn test_init_invoice_id_whitespace_panics() {
         &None,
         &None,
         &None,
+        &None
     );
 }
 
@@ -254,6 +263,7 @@ fn test_init_invoice_id_too_long_panics() {
         &None,
         &None,
         &None,
+        &None
     );
 }
 
@@ -279,6 +289,7 @@ fn test_init_invoice_id_bad_charset_hyphen_panics() {
         &None,
         &None,
         &None,
+        &None
     );
 }
 
@@ -305,6 +316,7 @@ fn test_init_stores_registry_some_and_getters() {
         &None,
         &None,
         &None,
+        &None
     );
     assert_eq!(client.get_registry_ref(), Some(reg));
     assert_eq!(client.get_funding_token(), token);
@@ -335,6 +347,7 @@ fn test_init_min_contribution_floor_stored() {
         &None,
         &Some(1_000i128),
         &None,
+        &None
     );
     assert_eq!(client.get_min_contribution_floor(), 1_000i128);
 }
@@ -361,6 +374,7 @@ fn test_init_min_contribution_floor_defaults_to_zero() {
         &None,
         &None,
         &None,
+        &None
     );
     assert_eq!(client.get_min_contribution_floor(), 0i128);
 }
@@ -388,6 +402,7 @@ fn test_init_min_contribution_zero_panics() {
         &None,
         &Some(0i128),
         &None,
+        &None
     );
 }
 
@@ -414,6 +429,7 @@ fn test_init_min_contribution_exceeds_amount_panics() {
         &None,
         &Some(1_001i128),
         &None,
+        &None
     );
 }
 
@@ -439,6 +455,7 @@ fn test_init_min_contribution_equal_to_amount_accepted() {
         &None,
         &Some(5_000i128),
         &None,
+        &None
     );
     assert_eq!(client.get_min_contribution_floor(), 5_000i128);
 }
@@ -488,6 +505,7 @@ fn test_init_registry_none_roundtrip() {
         &None,
         &None,
         &None,
+        &None
     );
     assert_eq!(client.get_registry_ref(), None);
 }
@@ -600,6 +618,7 @@ fn try_init_with_id(env: &Env, id: &str) -> Result<(), ()> {
             &None,
             &None,
             &None,
+            &None
         );
     }));
     result.map(|_| ()).map_err(|_| ())
@@ -645,6 +664,7 @@ fn test_invoice_id_length_33_panics() {
         &None,
         &None,
         &None,
+        &None
     );
 }
 

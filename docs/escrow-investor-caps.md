@@ -17,6 +17,7 @@ The LiquiFact escrow contract provides configurable limits on the number of dist
 ### Storage Schema
 
 - `DataKey::MaxUniqueInvestorsCap`: Optional `u32` cap on distinct investors
+- `DataKey::MaxPerInvestorCap`: Optional `i128` cap on cumulative principal per investor address
 - `DataKey::UniqueFunderCount`: Current count of distinct funders (initialized to 0)
 
 ## Implementation Details
@@ -53,6 +54,13 @@ if prev == 0 {
 - **Panic message:** `"unique investor cap reached"`
 - **Edge case:** Existing investors can always add more principal (doesn't count against cap)
 
+### Per-investor Cap Enforcement
+
+- **When checked:** On every deposit, for both first-time and returning investors
+- **What is checked:** `previous_contribution + amount <= configured_per_investor_cap`
+- **Panic message:** `"investor contribution exceeds max_per_investor cap"`
+- **Edge case:** A returning investor cannot exceed their configured cap across repeated deposits
+
 ### Initialization
 
 The cap is set during escrow initialization via the `max_unique_investors` parameter:
@@ -61,12 +69,15 @@ The cap is set during escrow initialization via the `max_unique_investors` param
 pub fn init(
     // ... other parameters
     max_unique_investors: Option<u32>,
+    max_per_investor: Option<i128>,
 ) -> InvoiceEscrow
 ```
 
-- `None`: No cap (unlimited investors)
-- `Some(n)`: Cap of `n` distinct investors
-- **Validation:** Cap must be positive if configured (`> 0`)
+- `None` for `max_unique_investors`: No distinct-investor cap (unlimited investors)
+- `Some(n)` for `max_unique_investors`: Cap of `n` distinct investors
+- `None` for `max_per_investor`: No per-investor cap (unlimited principal per address)
+- `Some(x)` for `max_per_investor`: Immutable maximum cumulative principal per investor address
+- **Validation:** Both caps must be positive if configured (`> 0`)
 
 ## API Reference
 
@@ -110,6 +121,7 @@ client.init(
     &yield_tiers,
     &min_contribution,
     &Some(10u32), // Max 10 investors
+    &Some(100_000_000_000i128), // Max 100 billion units per investor
 );
 ```
 
@@ -129,7 +141,8 @@ client.init(
     &treasury,
     &yield_tiers,
     &min_contribution,
-    &None, // No cap
+    &None, // No distinct-investor cap
+    &None, // No per-investor cap
 );
 ```
 

@@ -88,6 +88,14 @@ Returns the optional cap on distinct investor addresses. `None` means unlimited.
 
 ---
 
+## `get_max_per_investor_cap() → Option<i128>`
+
+**Storage key:** `DataKey::MaxPerInvestorCap`
+
+Returns the optional immutable cap on cumulative principal for a single investor. `None` means unlimited.
+
+---
+
 ## `get_unique_funder_count() → u32`
 
 **Storage key:** `DataKey::UniqueFunderCount`
