@@ -46,3 +46,55 @@ required. A comment was added at each site documenting this decision.
 
 These are micro-optimizations. The primary value is correctness hygiene and reduced instruction
 budget on the hot `fund` path, which is called once per investor deposit.
+
+---
+
+## TTL semantics and operational `bump_ttl` (rent/archival mitigation)
+
+`AllowlistActive` is stored in **instance** storage. `InvestorAllowlisted(addr)` entries are stored in
+**persistent** storage. These have different TTL semantics under Soroban's rent model.
+
+If instance storage expires and is not extended, `AllowlistActive` returns `false` (default via
+`unwrap_or`), silently disabling the allowlist gate even if persistent allowlist entries remain.
+Operators must extend instance storage TTL together with persistent storage TTL.
+
+### Permissionless TTL extension
+
+The contract includes a permissionless `bump_ttl` entrypoint that extends TTLs for:
+
+- **Instance storage** keys that affect settlement/claim readiness:
+  - `DataKey::Escrow`
+  - `DataKey::Version`
+  - `DataKey::LegalHold`
+  - `DataKey::AllowlistActive`
+  - `DataKey::FundingCloseSnapshot`
+  - per-investor instance keys passed in via the `allowlisted: Vec<Address>` argument
+    (`DataKey::InvestorContribution(addr)` and `DataKey::InvestorClaimNotBefore(addr)`)
+
+- **Persistent storage** allowlist entries:
+  - `DataKey::InvestorAllowlisted(addr)` for each address provided by the caller.
+
+Key properties (invariant):
+
+- **Extension never shortens** an existing TTL.
+- **No state mutation beyond TTL extension**: `bump_ttl` only calls `extend_ttl(...)`.
+
+### Thresholds
+
+Thresholds are defined as **named constants** in `escrow/src/lib.rs`:
+
+- `INSTANCE_TTL_MIN_EXTENSION_SECS`
+- `PERSISTENT_TTL_MIN_EXTENSION_SECS`
+
+### Why permissionless is acceptable
+
+Callers can safely invoke the entrypoint because extending TTL cannot harm the contract state:
+
+- the operation is monotonic (never decreases TTL)
+- only TTL extension occurs (no writes to escrow balances, gates, or payout markers)
+
+References:
+
+- ADR-007: storage key evolution policy and semantics
+- docs/escrow-ledger-time.md: time gates use `Env::ledger().timestamp()` with inclusive `>=` semantics
+

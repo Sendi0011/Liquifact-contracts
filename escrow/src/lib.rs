@@ -149,6 +149,22 @@ pub const MAX_DUST_SWEEP_AMOUNT: i128 = 100_000_000;
 /// Maximum UTF-8 byte length for the invoice `String` at init (matches Soroban [`Symbol`] max).
 pub const MAX_INVOICE_ID_STRING_LEN: u32 = 32;
 
+/// Minimum instance storage TTL extension horizon for time-sensitive escrow entries.
+
+///
+/// `bump_ttl` extends instance-storage entries to avoid rent/archival edge cases when
+/// maturity/claim locks are far in the future.
+///
+/// Named as a constant so operators can reason about and audit the threshold.
+pub const INSTANCE_TTL_MIN_EXTENSION_SECS: u64 = 60 * 60; // 1h
+
+/// Minimum persistent storage TTL extension horizon for per-investor allowlist entries.
+///
+/// When the escrow uses the allowlist gate, investor funding depends on persistent entries.
+/// Extending persistent allowlist TTL reduces the risk of silent allowlist disablement.
+pub const PERSISTENT_TTL_MIN_EXTENSION_SECS: u64 = 60 * 60; // 1h
+
+
 // --- Storage keys ---
 
 #[contracttype]
@@ -1593,16 +1609,70 @@ impl LiquifactEscrow {
         escrow
     }
 
-    /// Rotate escrow admin. Requires authorization from the **current** admin.
-    ///
-    /// **Not gated by legal hold** — intentional recovery lever when the current admin is
-    /// compromised or unresponsive. The hold persists across rotation; the new admin must
-    /// explicitly call [`LiquifactEscrow::clear_legal_hold`] before risk-bearing flows resume.
-    ///
-    /// **Guard ordering:** read [`DataKey::Escrow`] → `escrow.admin.require_auth()` → write.
+    pub fn bump_ttl(env: Env, allowlisted: Vec<Address>) {
+        // Permissionless TTL extension.
+        //
+        // Invariant: Soroban's `extend_ttl` never shortens TTL; this entrypoint only extends.
+        // No other state is mutated.
+        //
+        // Rationale: long-dated escrows (maturity far in the future) write time-sensitive
+        // data (`DataKey::Escrow`, snapshot, and per-investor claim gates). Under rent/archival
+        // semantics, instance storage can expire and cause defaulted reads (e.g. allowlist
+        // gate falls back to `false`), breaking settlement/claim readiness.
+        //
+        // Documentation references:
+        // - ADR-007: storage key evolution policy (additive changes / key semantics).
+        // - docs/escrow-ledger-time.md: all gating uses `Env::ledger().timestamp()` with `>=`.
+
+        // Instance storage keys required for settlement + gating behavior.
+        let k_escrow: DataKey = DataKey::Escrow;
+        env.storage().instance().extend_ttl(&k_escrow, &INSTANCE_TTL_MIN_EXTENSION_SECS);
+
+        let k_version: DataKey = DataKey::Version;
+        env.storage().instance().extend_ttl(&k_version, &INSTANCE_TTL_MIN_EXTENSION_SECS);
+
+        let k_legal_hold: DataKey = DataKey::LegalHold;
+        env.storage().instance().extend_ttl(&k_legal_hold, &INSTANCE_TTL_MIN_EXTENSION_SECS);
+
+        let k_allowlist_active: DataKey = DataKey::AllowlistActive;
+        env.storage()
+            .instance()
+            .extend_ttl(&k_allowlist_active, &INSTANCE_TTL_MIN_EXTENSION_SECS);
+
+        let k_snapshot: DataKey = DataKey::FundingCloseSnapshot;
+        env.storage()
+            .instance()
+            .extend_ttl(&k_snapshot, &INSTANCE_TTL_MIN_EXTENSION_SECS);
+
+        // Investor contribution + claim gates are instance keys (per investor).
+        // We cannot enumerate contributors on-chain; extend only what the caller provides.
+        for addr in allowlisted.iter() {
+            // Contribution + claim-gate entries are instance-scoped and per-investor.
+            let k_contrib = DataKey::InvestorContribution(addr.clone());
+            env.storage()
+                .instance()
+                .extend_ttl(&k_contrib, &INSTANCE_TTL_MIN_EXTENSION_SECS);
+
+            let k_claim_not_before = DataKey::InvestorClaimNotBefore(addr.clone());
+            env.storage()
+                .instance()
+                .extend_ttl(&k_claim_not_before, &INSTANCE_TTL_MIN_EXTENSION_SECS);
+        }
+
+
+        // Persistent allowlist entries.
+        for addr in allowlisted.iter() {
+            let k = DataKey::InvestorAllowlisted(addr.clone());
+            env.storage()
+                .persistent()
+                .extend_ttl(&k, &PERSISTENT_TTL_MIN_EXTENSION_SECS);
+        }
+    }
+
     pub fn transfer_admin(env: Env, new_admin: Address) -> InvoiceEscrow {
         // env.clone(): env is used again after this call for storage set and publish.
         let mut escrow = Self::get_escrow(env.clone());
+
 
         escrow.admin.require_auth();
 
