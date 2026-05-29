@@ -643,8 +643,8 @@ fn try_init_with_id(env: &Env, id: &str) -> Result<(), ()> {
             &None,
             &None,
             &None,
-        &None,
-    );
+            &None,
+        );
     }));
     result.map(|_| ()).map_err(|_| ())
 }
