@@ -266,6 +266,14 @@ pub enum EscrowError {
     LegalHoldClearNotReady = 151,
     /// Computing the legal-hold clear ready-at timestamp would overflow.
     LegalHoldClearDelayOverflow = 152,
+
+    /// A legal hold blocks rotating the beneficiary (SME) address.
+    LegalHoldBlocksBeneficiaryRotation = 160,
+    /// Beneficiary rotation was attempted while the escrow was not in a
+    /// pre-settlement state (`status` must be 0 = open or 1 = funded).
+    RotationNotOpen = 161,
+    /// The proposed new SME address is identical to the current beneficiary.
+    NewSmeSameAsCurrent = 162,
 }
 
 #[inline(always)]
@@ -540,6 +548,18 @@ pub struct EscrowFunded {
     /// The `min_lock_secs` of the matched [`YieldTier`] (0 when base yield applies — no tier,
     /// no lock commitment, or simple fund). See [`LiquifactEscrow::effective_yield_for_commitment`].
     pub tier_lock_secs: u64,
+}
+
+/// Emitted by [`LiquifactEscrow::rotate_beneficiary`] when the SME (beneficiary)
+/// address is changed, carrying both the prior and new addresses for auditing.
+#[contractevent]
+pub struct BeneficiaryRotated {
+    #[topic]
+    pub name: Symbol,
+    #[topic]
+    pub invoice_id: Symbol,
+    pub prior_sme: Address,
+    pub new_sme: Address,
 }
 
 #[contractevent]
@@ -1153,6 +1173,58 @@ impl LiquifactEscrow {
             .instance()
             .get(&DataKey::Escrow)
             .unwrap_or_else(|| fail(&env, EscrowError::EscrowNotInitialized))
+    }
+
+    /// Rotate the beneficiary (SME) address that receives liquidity on
+    /// settlement / `withdraw`.
+    ///
+    /// Permitted only before settlement (`status` 0 = open or 1 = funded) and
+    /// while no legal hold is active. Requires authorization from **both** the
+    /// current SME and the admin, so the payout destination can never be changed
+    /// unilaterally. A no-op rotation to the current address is rejected. Emits
+    /// [`BeneficiaryRotated`] with the prior and new addresses and returns the
+    /// updated escrow snapshot.
+    pub fn rotate_beneficiary(env: Env, new_sme_address: Address) -> InvoiceEscrow {
+        // Legal-hold gate (read-only).
+        ensure(
+            &env,
+            !Self::legal_hold_active(&env),
+            EscrowError::LegalHoldBlocksBeneficiaryRotation,
+        );
+
+        let mut escrow = Self::get_escrow(env.clone());
+
+        // Only permitted in pre-settlement states (open or funded).
+        ensure(
+            &env,
+            escrow.status == 0 || escrow.status == 1,
+            EscrowError::RotationNotOpen,
+        );
+
+        // Reject a no-op rotation to the current beneficiary.
+        ensure(
+            &env,
+            new_sme_address != escrow.sme_address,
+            EscrowError::NewSmeSameAsCurrent,
+        );
+
+        // Dual authorization: the outgoing SME and the admin must both sign.
+        escrow.sme_address.require_auth();
+        escrow.admin.require_auth();
+
+        let prior_sme = escrow.sme_address.clone();
+        escrow.sme_address = new_sme_address.clone();
+        env.storage().instance().set(&DataKey::Escrow, &escrow);
+
+        BeneficiaryRotated {
+            name: symbol_short!("ben_rot"),
+            invoice_id: escrow.invoice_id.clone(),
+            prior_sme,
+            new_sme: new_sme_address,
+        }
+        .publish(&env);
+
+        escrow
     }
 
     /// Load the current escrow and require admin authorization in one step.
