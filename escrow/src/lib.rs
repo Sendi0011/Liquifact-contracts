@@ -274,6 +274,9 @@ pub enum EscrowError {
     RotationNotOpen = 161,
     /// The proposed new SME address is identical to the current beneficiary.
     NewSmeSameAsCurrent = 162,
+
+    /// Attempted to accept admin role when no pending admin exists.
+    NoPendingAdmin = 163,
 }
 
 #[inline(always)]
@@ -1730,10 +1733,11 @@ impl LiquifactEscrow {
         let escrow = Self::load_escrow_require_admin(&env);
 
         let n = investors.len();
-        assert!(n > 0, "investors vector must be non-empty");
-        assert!(
+        ensure(&env, n > 0, EscrowError::InvestorBatchEmpty);
+        ensure(
+            &env,
             n <= MAX_INVESTOR_ALLOWLIST_BATCH,
-            "investors vector length exceeds MAX_INVESTOR_ALLOWLIST_BATCH"
+            EscrowError::InvestorBatchTooLarge,
         );
 
         // Iterate and perform per-address persistent storage write and event emission.
@@ -1806,22 +1810,25 @@ impl LiquifactEscrow {
     pub fn lower_max_unique_investors(env: Env, new_cap: u32) -> u32 {
         let escrow = Self::load_escrow_require_admin(&env);
 
-        assert!(escrow.status == 0, "Cap can only be lowered in Open state");
+        ensure(&env, escrow.status == 0, EscrowError::CapLowerNotOpen);
 
-        let old_cap: u32 = env
+        let old_cap: Option<u32> = env
             .storage()
             .instance()
-            .get(&DataKey::MaxUniqueInvestorsCap)
-            .unwrap_or_else(|| panic!("no investor cap configured"));
+            .get(&DataKey::MaxUniqueInvestorsCap);
+        ensure(
+            &env,
+            old_cap.is_some(),
+            EscrowError::NoInvestorCapConfigured,
+        );
+        let old_cap = old_cap.unwrap();
         let unique_count = Self::get_unique_funder_count(env.clone());
 
-        assert!(
-            new_cap < old_cap,
-            "new cap must be strictly lower than current cap"
-        );
-        assert!(
+        ensure(&env, new_cap < old_cap, EscrowError::NewCapNotLower);
+        ensure(
+            &env,
             new_cap >= unique_count,
-            "new cap cannot be below current unique funder count"
+            EscrowError::NewCapBelowCurrentFunderCount,
         );
 
         env.storage()
@@ -2500,11 +2507,9 @@ impl LiquifactEscrow {
     /// promoted into [`InvoiceEscrow::admin`] and the pending key is cleared, so admin authority
     /// changes only after both the current admin and successor have explicitly authorized.
     pub fn accept_admin(env: Env) -> InvoiceEscrow {
-        let pending: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::PendingAdmin)
-            .unwrap_or_else(|| panic!("No pending admin"));
+        let pending: Option<Address> = env.storage().instance().get(&DataKey::PendingAdmin);
+        ensure(&env, pending.is_some(), EscrowError::NoPendingAdmin);
+        let pending = pending.unwrap();
         pending.require_auth();
 
         let mut escrow = Self::get_escrow(env.clone());

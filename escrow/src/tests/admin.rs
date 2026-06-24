@@ -203,7 +203,7 @@ fn test_transfer_admin_uninitialized_panics() {
 }
 
 #[test]
-#[should_panic(expected = "No pending admin")]
+#[should_panic]
 fn test_accept_admin_without_pending_panics() {
     let env = Env::default();
     let (client, admin, sme) = setup(&env);

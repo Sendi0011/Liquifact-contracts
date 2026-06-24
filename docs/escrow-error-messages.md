@@ -86,6 +86,7 @@ Legacy panic messages are listed only to help integrators migrate old simulation
 | 141 | `CancelFundingNotOpen` | `cancel_funding only allowed in Open state` |
 | 142 | `RefundNotCancelled` | `refund only allowed in Cancelled state` |
 | 143 | `NoContributionToRefund` | `no contribution to refund` |
+| 163 | `NoPendingAdmin` | `No pending admin` |
 
 ## Client Guidance
 
