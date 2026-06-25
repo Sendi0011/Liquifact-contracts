@@ -45,6 +45,17 @@ forbidden regressions, and interaction rules between `withdraw` vs `settle` path
 (terminal)  (terminal)
 ```
 
+## Token Custody during Funding
+
+To ensure custody is real and on-chain token balances reconcile with `funded_amount`, the contract performs atomic token transfers during funding:
+
+1. **Atomic Transfer:** Every successful call to `fund()`, `fund_with_commitment()`, or `fund_batch()` atomically pulls the specified token amount from the investor's balance to the escrow contract (`env.current_contract_address()`).
+2. **Balance-Delta Verification:** The transfer utilizes `external_calls::transfer_funding_token_inbound_with_balance_checks` to read pre/post balances of the investor and the escrow contract. It asserts that:
+   - The investor's balance decreased by exactly `amount`.
+   - The contract's balance increased by exactly `amount`.
+   - Any mismatch or insufficient balance reverts the entire transaction, ensuring no double-credit or state mutation on failure.
+3. **Reconciliation Invariant:** The contract's token balance always matches or exceeds `funded_amount` (reclaimed using `refund()` or settled/withdrawn). This ensures that the terminal dust sweep math `balance - sweep_amt >= funded_amount - distributed_principal` remains sound and protected.
+
 ---
 
 ## Batch funding (`fund_batch`)

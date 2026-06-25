@@ -149,8 +149,8 @@ cargo clippy --all-targets -- -D warnings
 | Entrypoint | Description |
 |------------|-------------|
 | `init` | Create an invoice escrow; binds funding token, treasury, optional registry. |
-| `fund` | Record investor principal; marks escrow funded when target is met. |
-| `fund_with_commitment` | First deposit with optional lock period; selects tiered yield. |
+| `fund` | Record investor principal and atomically pull the funding token from the investor; marks escrow funded when target is met. |
+| `fund_with_commitment` | First deposit with optional lock period (atomically pulling the funding token); selects tiered yield. |
 | `settle` | Mark a funded escrow as settled (SME auth required; maturity enforced). |
 | `withdraw` | SME pulls funded liquidity (accounting record). |
 | `claim_investor_payout` | Investor records a payout claim after settlement. |

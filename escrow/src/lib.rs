@@ -2056,24 +2056,31 @@ impl LiquifactEscrow {
         env.deployer().update_current_contract_wasm(new_wasm_hash);
     }
 
-    /// Record investor principal while the invoice is **open**. First deposit sets base
+    /// Record investor principal while the invoice is **open**, atomically transferring the funding
+    /// token from the investor's address to the contract. First deposit sets base
     /// [`InvoiceEscrow::yield_bps`] for this investor; further amounts must use this method (not
     /// [`LiquifactEscrow::fund_with_commitment`]) so tier selection stays immutable after the first leg.
     ///
+    /// # Token Custody & Invariants
+    /// atomically pulls the specified `amount` of [`DataKey::FundingToken`] from the `investor`
+    /// to `env.current_contract_address()`, performing strict pre/post balance-delta validation.
+    ///
     /// # Errors
     /// Emits typed [`EscrowError`] codes for invalid amount, legal hold, closed funding state,
-    /// allowlist rejection, cap violations, and checked-arithmetic overflow.
+    /// allowlist rejection, cap violations, checked-arithmetic overflow, and inbound token transfer failures.
     pub fn fund(env: Env, investor: Address, amount: i128) -> InvoiceEscrow {
         Self::fund_impl(env, investor, amount, true, 0)
     }
 
     /// First deposit only (per investor): optional longer lock and tier ladder from [`DataKey::YieldTierTable`].
+    /// Atomically pulls the specified `amount` of [`DataKey::FundingToken`] from the `investor`
+    /// to `env.current_contract_address()`, performing strict pre/post balance-delta validation.
     /// Sets [`DataKey::InvestorClaimNotBefore`] when `committed_lock_secs > 0`. Additional principal
     /// from the same investor must use [`LiquifactEscrow::fund`].
     ///
     /// # Errors
     /// Emits typed [`EscrowError`] codes for the same funding guards as [`LiquifactEscrow::fund`],
-    /// plus tiered follow-on deposit misuse and claim-lock timestamp overflow.
+    /// plus tiered follow-on deposit misuse, claim-lock timestamp overflow, and inbound token transfer failures.
     pub fn fund_with_commitment(
         env: Env,
         investor: Address,
