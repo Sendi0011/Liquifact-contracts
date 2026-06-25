@@ -492,6 +492,8 @@ pub enum DataKey {
     DistributedPrincipal,
     /// Optional funding deadline (ledger timestamp); after it passes, new funds are rejected.
     FundingDeadline,
+    /// Bounded vector of investor addresses who have contributed to the escrow.
+    InvestorIndex,
 }
 
 // --- Data types ---
@@ -1659,6 +1661,39 @@ impl LiquifactEscrow {
         Self::get_persistent_investor_contribution(&env, investor)
     }
 
+    /// Returns a paginated list of investor addresses who have contributed to this escrow.
+    ///
+    /// Legacy instances that predate this feature will return an empty list (backward compatible under ADR-007).
+    ///
+    /// # Arguments
+    /// * `start` - The starting index (0-based) of the pagination.
+    /// * `limit` - The maximum number of investor addresses to return (capped at a hard limit of 50).
+    ///
+    /// # Returns
+    /// A `Vec<Address>` containing the investor addresses within the requested page.
+    pub fn get_investors(env: Env, start: u32, limit: u32) -> Vec<Address> {
+        let index: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::InvestorIndex)
+            .unwrap_or_else(|| Vec::new(&env));
+
+        let len = index.len();
+        if start >= len || limit == 0 {
+            return Vec::new(&env);
+        }
+
+        let actual_limit = limit.min(50);
+        let end = (start + actual_limit).min(len);
+
+        let mut result = Vec::new(&env);
+        for i in start..end {
+            result.push_back(index.get(i).unwrap());
+        }
+        result
+    }
+
+
     /// Pro-rata denominator captured when the escrow first became **funded**; [`None`] until then.
     ///
     /// The snapshot is write-once. It records the full `funded_amount` at the threshold-crossing
@@ -2393,6 +2428,16 @@ impl LiquifactEscrow {
         Self::set_persistent_investor_contribution(&env, investor.clone(), new_contribution);
 
         if prev == 0 {
+            let mut index: Vec<Address> = env
+                .storage()
+                .instance()
+                .get(&DataKey::InvestorIndex)
+                .unwrap_or_else(|| Vec::new(&env));
+            index.push_back(investor.clone());
+            env.storage()
+                .instance()
+                .set(&DataKey::InvestorIndex, &index);
+
             // Use the hoisted cur_funder_count; no second storage read needed.
             env.storage()
                 .instance()
