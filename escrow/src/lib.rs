@@ -288,7 +288,7 @@ pub enum EscrowError {
     NewSmeSameAsCurrent = 162,
 
     /// Attempted to accept admin role when no pending admin exists.
-    NoPendingAdmin = 163,
+    NoPendingAdmin = 164,
 }
 
 #[inline(always)]
@@ -617,6 +617,8 @@ pub struct EscrowSettled {
     pub funded_amount: i128,
     pub yield_bps: i64,
     pub maturity: u64,
+    /// Ledger timestamp at which the settlement occurred.
+    pub settled_at_ledger_timestamp: u64,
 }
 
 #[contractevent]
@@ -966,8 +968,14 @@ impl LiquifactEscrow {
 
         // Validate funding deadline
         if let Some(deadline) = funding_deadline {
-            ensure(&env, deadline > env.ledger().timestamp(), EscrowError::FundingDeadlinePassed);
-            env.storage().instance().set(&DataKey::FundingDeadline, &deadline);
+            ensure(
+                &env,
+                deadline > env.ledger().timestamp(),
+                EscrowError::FundingDeadlinePassed,
+            );
+            env.storage()
+                .instance()
+                .set(&DataKey::FundingDeadline, &deadline);
         }
 
         Self::validate_yield_tiers_table(&env, &yield_tiers, yield_bps);
@@ -2159,7 +2167,11 @@ impl LiquifactEscrow {
 
         // Check funding deadline
         if let Some(deadline) = env.storage().instance().get(&DataKey::FundingDeadline) {
-            ensure(&env, env.ledger().timestamp() <= deadline, EscrowError::FundingDeadlinePassed);
+            ensure(
+                &env,
+                env.ledger().timestamp() <= deadline,
+                EscrowError::FundingDeadlinePassed,
+            );
         }
 
         if Self::is_allowlist_active(env.clone()) {
@@ -2381,8 +2393,8 @@ impl LiquifactEscrow {
 
         ensure(&env, escrow.status == 1, EscrowError::SettlementNotFunded);
 
+        let now = env.ledger().timestamp();
         if escrow.maturity > 0 {
-            let now = env.ledger().timestamp();
             ensure(
                 &env,
                 now >= escrow.maturity,
@@ -2400,10 +2412,37 @@ impl LiquifactEscrow {
             funded_amount: escrow.funded_amount,
             yield_bps: escrow.yield_bps,
             maturity: escrow.maturity,
+            settled_at_ledger_timestamp: now,
         }
         .publish(&env);
 
         escrow
+    }
+
+    /// Read-only check: whether this escrow is currently settleable.
+    ///
+    /// Returns `true` when all of the following hold:
+    /// - `status == 1` (funded)
+    /// - `maturity == 0` **or** `env.ledger().timestamp() >= maturity`
+    /// - No legal hold is active
+    ///
+    /// # Security
+    /// Pure read — no authorization required, no state mutation.
+    pub fn is_settleable(env: Env) -> bool {
+        if Self::legal_hold_active(&env) {
+            return false;
+        }
+        let escrow = Self::get_escrow(env.clone());
+        if escrow.status != 1 {
+            return false;
+        }
+        if escrow.maturity > 0 {
+            let now = env.ledger().timestamp();
+            if now < escrow.maturity {
+                return false;
+            }
+        }
+        true
     }
 
     /// SME pulls funded liquidity (accounting). Blocked when a legal hold is active.

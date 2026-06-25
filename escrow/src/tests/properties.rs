@@ -687,6 +687,7 @@ fn fuzz_multi_investor_fund_ordering_snapshot_once_only() {
             &None,
             &None,
             &None,
+            &None,
         );
 
         // Randomize investor count/order and positive amounts. Keep the sequence small so
