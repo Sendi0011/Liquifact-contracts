@@ -568,19 +568,73 @@ fn test_init_min_contribution_equal_to_amount_accepted() {
 }
 
 #[test]
-#[should_panic]
-fn test_get_funding_token_before_init_panics() {
+fn test_get_funding_token_before_init_fails_with_typed_error() {
     let env = Env::default();
     let client = deploy(&env);
-    client.get_funding_token();
+    assert_contract_error(
+        client.try_get_funding_token(),
+        EscrowError::FundingTokenNotSet,
+    );
 }
 
 #[test]
-#[should_panic]
-fn test_get_treasury_before_init_panics() {
+fn test_get_treasury_before_init_fails_with_typed_error() {
     let env = Env::default();
     let client = deploy(&env);
-    client.get_treasury();
+    assert_contract_error(
+        client.try_get_treasury(),
+        EscrowError::TreasuryNotSet,
+    );
+}
+
+#[test]
+fn test_get_funding_token_after_init_succeeds() {
+    let env = Env::default();
+    let (client, admin, sme) = setup(&env);
+    let (token, treasury) = free_addresses(&env);
+    client.init(
+        &admin,
+        &soroban_sdk::String::from_str(&env, "FT001"),
+        &sme,
+        &TARGET,
+        &800i64,
+        &1000u64,
+        &token,
+        &None,
+        &treasury,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+    );
+    assert_eq!(client.get_funding_token(), token);
+}
+
+#[test]
+fn test_get_treasury_after_init_succeeds() {
+    let env = Env::default();
+    let (client, admin, sme) = setup(&env);
+    let (token, treasury) = free_addresses(&env);
+    client.init(
+        &admin,
+        &soroban_sdk::String::from_str(&env, "TR001"),
+        &sme,
+        &TARGET,
+        &800i64,
+        &1000u64,
+        &token,
+        &None,
+        &treasury,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+    );
+    assert_eq!(client.get_treasury(), treasury);
 }
 
 #[test]

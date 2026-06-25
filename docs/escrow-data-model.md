@@ -202,6 +202,24 @@ test plan.
 
 ---
 
+## Private typed accessors
+
+Two private helpers centralise storage reads for immutable addresses, ensuring consistent
+error codes across all entrypoints:
+
+| Accessor | Key read | Error on absence |
+|----------|----------|-----------------|
+| `funding_token_or_fail(&env)` | `DataKey::FundingToken` | [`EscrowError::FundingTokenNotSet`] (code 21) |
+| `treasury_or_fail(&env)` | `DataKey::Treasury` | [`EscrowError::TreasuryNotSet`] (code 22) |
+
+Both are defined as `fn(&Env) -> Address` inside `impl LiquifactEscrow` (not public
+entrypoints). They panic with the typed error listed above when called before `init`.
+The public getters `get_funding_token` and `get_treasury` delegate to them; internal
+callers (`sweep_terminal_dust`, `refund`) also use them instead of inlining the
+`.get().unwrap_or_else(|| fail(...))` pattern.
+
+---
+
 ## Security notes
 
 - **Token economics:** `external_calls::transfer_funding_token_with_balance_checks` asserts exact

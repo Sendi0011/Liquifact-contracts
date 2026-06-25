@@ -1,29 +1,11 @@
 use super::{free_addresses, setup};
 use crate::{CollateralCommitmentSnapshot, DataKey, EscrowCloseSnapshot, EscrowError, YieldTier};
 use soroban_sdk::{
-    testutils::{Address as _, Events, Ledger},
-    Address, Env, Error, InvokeError, Vec as SorobanVec,
+    testutils::{Address as _, Ledger},
+    Address, Env, Vec as SorobanVec,
 };
-use std::fmt::Debug;
 
-fn assert_contract_error<T, E>(
-    result: Result<Result<T, E>, Result<Error, InvokeError>>,
-    expected: EscrowError,
-) where
-    T: Debug,
-    E: Debug,
-{
-    let expected_code = expected as u32;
-    match result {
-        Err(Ok(error)) => {
-            assert_eq!(error, Error::from_contract_error(expected_code));
-        }
-        Err(Err(InvokeError::Contract(code))) => {
-            assert_eq!(code, expected_code);
-        }
-        other => panic!("expected ContractError({expected_code}), got {other:?}"),
-    }
-}
+pub(crate) use super::assert_contract_error;
 
 #[test]
 fn typed_error_codes_cover_init_and_state_guards() {

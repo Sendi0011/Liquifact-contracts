@@ -848,6 +848,24 @@ impl LiquifactEscrow {
             .unwrap_or(false)
     }
 
+    /// Read the immutable funding token address, failing with [`EscrowError::FundingTokenNotSet`]
+    /// when the escrow has not been initialized.
+    fn funding_token_or_fail(env: &Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&DataKey::FundingToken)
+            .unwrap_or_else(|| fail(env, EscrowError::FundingTokenNotSet))
+    }
+
+    /// Read the immutable treasury address, failing with [`EscrowError::TreasuryNotSet`]
+    /// when the escrow has not been initialized.
+    fn treasury_or_fail(env: &Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&DataKey::Treasury)
+            .unwrap_or_else(|| fail(env, EscrowError::TreasuryNotSet))
+    }
+
     fn validate_yield_tiers_table(env: &Env, tiers: &Option<Vec<YieldTier>>, base_yield: i64) {
         let Some(tiers) = tiers else {
             return;
@@ -1070,10 +1088,7 @@ impl LiquifactEscrow {
     /// **Immutable:** set once at init; cannot change after deploy. Emits
     /// [`EscrowError::FundingTokenNotSet`] if called before init.
     pub fn get_funding_token(env: Env) -> Address {
-        env.storage()
-            .instance()
-            .get(&DataKey::FundingToken)
-            .unwrap_or_else(|| fail(&env, EscrowError::FundingTokenNotSet))
+        Self::funding_token_or_fail(&env)
     }
 
     /// Returns the protocol treasury address bound at [`LiquifactEscrow::init`] ([`DataKey::Treasury`]).
@@ -1082,10 +1097,7 @@ impl LiquifactEscrow {
     /// recipient of [`LiquifactEscrow::sweep_terminal_dust`]. Emits
     /// [`EscrowError::TreasuryNotSet`] if called before init.
     pub fn get_treasury(env: Env) -> Address {
-        env.storage()
-            .instance()
-            .get(&DataKey::Treasury)
-            .unwrap_or_else(|| fail(&env, EscrowError::TreasuryNotSet))
+        Self::treasury_or_fail(&env)
     }
 
     /// Returns the optional off-chain registry hint stored at [`DataKey::RegistryRef`], or [`None`]
@@ -1170,18 +1182,10 @@ impl LiquifactEscrow {
             EscrowError::DustSweepNotTerminal,
         );
 
-        let treasury: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::Treasury)
-            .unwrap_or_else(|| fail(&env, EscrowError::TreasuryNotSet));
+        let treasury = Self::treasury_or_fail(&env);
         treasury.require_auth();
 
-        let token_addr = env
-            .storage()
-            .instance()
-            .get(&DataKey::FundingToken)
-            .unwrap_or_else(|| fail(&env, EscrowError::FundingTokenNotSet));
+        let token_addr = Self::funding_token_or_fail(&env);
         let this = env.current_contract_address();
 
         let token = TokenClient::new(&env, &token_addr);
@@ -2839,11 +2843,7 @@ impl LiquifactEscrow {
             &prev_distributed.saturating_add(amount),
         );
 
-        let token_addr: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::FundingToken)
-            .unwrap_or_else(|| fail(&env, EscrowError::FundingTokenNotSet));
+        let token_addr = Self::funding_token_or_fail(&env);
         let this = env.current_contract_address();
 
         external_calls::transfer_funding_token_with_balance_checks(

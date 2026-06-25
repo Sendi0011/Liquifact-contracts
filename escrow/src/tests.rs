@@ -16,8 +16,28 @@ use soroban_sdk::{
     symbol_short,
     testutils::{Address as _, Events, Ledger as _},
     token::{StellarAssetClient, TokenClient},
-    Address, Env, Event, String, Val, Vec as SorobanVec,
+    Address, Env, Error, Event, InvokeError, String, Val, Vec as SorobanVec,
 };
+use std::fmt::Debug;
+
+pub(crate) fn assert_contract_error<T, E>(
+    result: Result<Result<T, E>, Result<Error, InvokeError>>,
+    expected: EscrowError,
+) where
+    T: Debug,
+    E: Debug,
+{
+    let expected_code = expected as u32;
+    match result {
+        Err(Ok(error)) => {
+            assert_eq!(error, Error::from_contract_error(expected_code));
+        }
+        Err(Err(InvokeError::Contract(code))) => {
+            assert_eq!(code, expected_code);
+        }
+        other => panic!("expected ContractError({expected_code}), got {other:?}"),
+    }
+}
 
 // Focused test tree for escrow behavior. Shared helpers live here so feature
 // modules stay assertion-focused and each test still owns a fresh Env.
