@@ -831,14 +831,14 @@ fn test_legal_hold_midflow_blocks_then_resumes_with_ordered_events() {
 /// Helper: deploy, init with a real SAC token, fund to `target`, and mint
 /// `target` tokens into the escrow contract.  Returns
 /// `(client, escrow_id, token_client, sme)`.
-fn setup_withdraw_with_token(
-    env: &Env,
+fn setup_withdraw_with_token<'a>(
+    env: &'a Env,
     target: i128,
-    invoice_id: &str,
+    invoice_id: &'a str,
 ) -> (
-    LiquifactEscrowClient<'_>,
+    LiquifactEscrowClient<'a>,
     soroban_sdk::Address,
-    soroban_sdk::token::TokenClient<'_>,
+    soroban_sdk::token::TokenClient<'a>,
     soroban_sdk::Address,
 ) {
     use crate::LiquifactEscrow;

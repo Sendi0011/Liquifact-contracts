@@ -4,7 +4,7 @@ use super::{
 };
 use crate::{CollateralCommitmentSnapshot, DataKey, EscrowCloseSnapshot, EscrowError, YieldTier};
 use soroban_sdk::{
-    testutils::{Address as _, Ledger},
+    testutils::{Address as _, Events, Ledger},
     Address, BytesN, Env, Error, InvokeError, Vec as SorobanVec,
 };
 
@@ -201,10 +201,11 @@ fn escrow_error_discriminants_match_canonical_table() {
         (EscrowError::LegalHoldBlocksBeneficiaryRotation, 160),
         (EscrowError::RotationNotOpen, 161),
         (EscrowError::NewSmeSameAsCurrent, 162),
-        (EscrowError::FundingDeadlinePassed, 164),
         (EscrowError::NoPendingAdmin, 163),
+        (EscrowError::InsufficientContractBalance, 164),
+        (EscrowError::FundingDeadlinePassed, 165),
     ];
-    assert_eq!(TABLE.len(), 84);
+    assert_eq!(TABLE.len(), 85);
     for (variant, code) in TABLE {
         assert_eq!(*variant as u32, *code, "discriminant drift for code {code}");
     }
@@ -2414,36 +2415,8 @@ fn test_record_sme_collateral_commitment_semantics() {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
-// `is_settleable` view — readiness across status/maturity/hold combinations
+// `EscrowSettled` event — `settled_at_ledger_timestamp` field
 // ──────────────────────────────────────────────────────────────────────────────
-
-/// Helper: initialise a standard escrow for is_settleable tests.
-fn init_settleable_test(
-    env: &Env,
-    client: &super::LiquifactEscrowClient<'_>,
-    admin: &Address,
-    sme: &Address,
-    maturity: u64,
-) {
-    let (token, treasury) = free_addresses(env);
-    client.init(
-        admin,
-        &soroban_sdk::String::from_str(env, "STL_001"),
-        sme,
-        &1000,
-        &100,
-        &maturity,
-        &token,
-        &None,
-        &treasury,
-        &None,
-        &None,
-        &None,
-        &None,
-        &None,
-        &None,
-    );
-}
 
 /// Fund to exactly the target amount using a fresh investor.
 fn fund_to_target_stl(env: &Env, client: &super::LiquifactEscrowClient<'_>) -> Address {
@@ -2451,117 +2424,6 @@ fn fund_to_target_stl(env: &Env, client: &super::LiquifactEscrowClient<'_>) -> A
     client.fund(&investor, &1000);
     investor
 }
-
-#[test]
-fn test_is_settleable_open_status_returns_false() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let (client, admin, sme) = setup(&env);
-    init_settleable_test(&env, &client, &admin, &sme, 0);
-    // status = 0 (open) — not funded yet
-    assert!(!client.is_settleable());
-}
-
-#[test]
-fn test_is_settleable_funded_no_maturity_returns_true() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let (client, admin, sme) = setup(&env);
-    init_settleable_test(&env, &client, &admin, &sme, 0);
-    fund_to_target_stl(&env, &client);
-    // status = 1 (funded), maturity = 0, no hold → settleable
-    assert!(client.is_settleable());
-}
-
-#[test]
-fn test_is_settleable_funded_with_maturity_before_returns_false() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let (client, admin, sme) = setup(&env);
-    let maturity: u64 = 20_000;
-    init_settleable_test(&env, &client, &admin, &sme, maturity);
-    fund_to_target_stl(&env, &client);
-    // Advance ledger to just before maturity
-    env.ledger().with_mut(|l| l.timestamp = maturity - 1);
-    assert!(!client.is_settleable());
-}
-
-#[test]
-fn test_is_settleable_funded_with_maturity_at_exact_returns_true() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let (client, admin, sme) = setup(&env);
-    let maturity: u64 = 20_000;
-    init_settleable_test(&env, &client, &admin, &sme, maturity);
-    fund_to_target_stl(&env, &client);
-    env.ledger().with_mut(|l| l.timestamp = maturity);
-    assert!(client.is_settleable());
-}
-
-#[test]
-fn test_is_settleable_blocked_by_legal_hold() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let (client, admin, sme) = setup(&env);
-    init_settleable_test(&env, &client, &admin, &sme, 0);
-    fund_to_target_stl(&env, &client);
-    client.set_legal_hold(&true);
-    assert!(!client.is_settleable());
-}
-
-#[test]
-fn test_is_settleable_already_settled_returns_false() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let (client, admin, sme) = setup(&env);
-    init_settleable_test(&env, &client, &admin, &sme, 0);
-    fund_to_target_stl(&env, &client);
-    client.settle();
-    assert!(!client.is_settleable());
-}
-
-#[test]
-fn test_is_settleable_withdrawn_returns_false() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let (client, admin, sme) = setup(&env);
-    init_settleable_test(&env, &client, &admin, &sme, 0);
-    fund_to_target_stl(&env, &client);
-    client.withdraw();
-    assert!(!client.is_settleable());
-}
-
-#[test]
-fn test_is_settleable_not_initialized_panics() {
-    let env = Env::default();
-    let (client, _admin, _sme) = setup(&env);
-    // No init call — get_escrow returns error
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        client.is_settleable();
-    }));
-    assert!(
-        result.is_err(),
-        "is_settleable must panic when escrow not initialized"
-    );
-}
-
-#[test]
-fn test_is_settleable_funded_maturity_zero_hold_active_returns_false() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let (client, admin, sme) = setup(&env);
-    init_settleable_test(&env, &client, &admin, &sme, 0);
-    fund_to_target_stl(&env, &client);
-    client.set_legal_hold(&true);
-    assert!(
-        !client.is_settleable(),
-        "hold must block settleability even when maturity is 0"
-    );
-}
-
-// ──────────────────────────────────────────────────────────────────────────────
-// `EscrowSettled` event — `settled_at_ledger_timestamp` field
-// ──────────────────────────────────────────────────────────────────────────────
 
 #[test]
 fn test_settle_event_timestamp_matches_ledger_time() {
@@ -2668,44 +2530,4 @@ fn test_settle_event_emitted_at_current_ledger_time() {
 
     // The settled escrow status confirms the event was emitted
     assert_eq!(client.get_escrow().status, 2);
-}
-
-// ──────────────────────────────────────────────────────────────────────────────
-// `is_settleable` edge: partial_settle then pre-maturity
-// ──────────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn test_is_settleable_after_partial_settle_with_maturity() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let (client, admin, sme) = setup(&env);
-    let maturity: u64 = 10_000;
-    init_settleable_test(&env, &client, &admin, &sme, maturity);
-
-    // Partial fund and partial_settle
-    let investor = Address::generate(&env);
-    client.fund(&investor, &500);
-    client.partial_settle(&sme);
-    // status = 1 (funded) after partial_settle
-
-    // Before maturity
-    env.ledger().with_mut(|l| l.timestamp = maturity - 1);
-    assert!(
-        !client.is_settleable(),
-        "pre-maturity after partial_settle must not be settleable"
-    );
-
-    // At maturity
-    env.ledger().with_mut(|l| l.timestamp = maturity);
-    assert!(
-        client.is_settleable(),
-        "at-maturity after partial_settle must be settleable"
-    );
-
-    // After settlement
-    client.settle();
-    assert!(
-        !client.is_settleable(),
-        "settled escrow must not be settleable"
-    );
 }

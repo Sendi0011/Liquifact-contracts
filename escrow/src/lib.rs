@@ -351,7 +351,7 @@ pub enum EscrowError {
     /// Computing the legal-hold clear ready-at timestamp would overflow.
     LegalHoldClearDelayOverflow = 152,
     /// Funding deadline has passed, new deposits are rejected.
-    FundingDeadlinePassed = 164,
+    FundingDeadlinePassed = 165,
 
     /// A legal hold blocks rotating the beneficiary (SME) address.
     LegalHoldBlocksBeneficiaryRotation = 160,
