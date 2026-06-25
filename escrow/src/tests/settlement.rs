@@ -45,7 +45,11 @@ fn fund_to_target(client: &super::LiquifactEscrowClient<'_>, env: &Env) -> Addre
 /// actually transfer them.  Returns `(client, sme, sac_admin_client)`.
 fn setup_funded_with_token<'a>(
     env: &'a Env,
-) -> (super::LiquifactEscrowClient<'a>, Address, StellarAssetClient<'a>) {
+) -> (
+    super::LiquifactEscrowClient<'a>,
+    Address,
+    StellarAssetClient<'a>,
+) {
     let sac = env.register_stellar_asset_contract_v2(Address::generate(env));
     let token_id = sac.address();
     let sac_admin = StellarAssetClient::new(env, &token_id);
@@ -1673,11 +1677,17 @@ fn settled_at_is_none_before_settle() {
     default_init(&client, &env, &admin, &sme);
 
     // Not yet funded — should be None.
-    assert!(client.get_settled_at().is_none(), "settled_at must be None before settle");
+    assert!(
+        client.get_settled_at().is_none(),
+        "settled_at must be None before settle"
+    );
 
     // Fund to target (status 1) — still None.
     fund_to_target(&client, &env);
-    assert!(client.get_settled_at().is_none(), "settled_at must be None after funding, before settle");
+    assert!(
+        client.get_settled_at().is_none(),
+        "settled_at must be None after funding, before settle"
+    );
 }
 
 /// `get_settled_at` returns `Some(timestamp)` equal to the ledger time at `settle()`.
@@ -1693,8 +1703,13 @@ fn settled_at_recorded_at_settle() {
     env.ledger().with_mut(|l| l.timestamp = settle_ts);
     client.settle();
 
-    let stored = client.get_settled_at().expect("settled_at must be Some after settle");
-    assert_eq!(stored, settle_ts, "settled_at must equal the ledger timestamp at settle()");
+    let stored = client
+        .get_settled_at()
+        .expect("settled_at must be Some after settle");
+    assert_eq!(
+        stored, settle_ts,
+        "settled_at must equal the ledger timestamp at settle()"
+    );
 }
 
 /// `get_settled_at` value is stable — subsequent reads return the same timestamp.
@@ -1712,8 +1727,13 @@ fn settled_at_is_stable_after_settle() {
 
     // Advance ledger — stored value must not change.
     env.ledger().with_mut(|l| l.timestamp = settle_ts + 10_000);
-    let stored = client.get_settled_at().expect("settled_at must remain Some");
-    assert_eq!(stored, settle_ts, "settled_at must not change after additional ledger advancement");
+    let stored = client
+        .get_settled_at()
+        .expect("settled_at must remain Some");
+    assert_eq!(
+        stored, settle_ts,
+        "settled_at must not change after additional ledger advancement"
+    );
 }
 
 /// `settle()` with maturity = 0 (no time-lock) still records the correct timestamp.
