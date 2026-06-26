@@ -198,7 +198,6 @@ pub enum EscrowError {
 ///   and all intermediate `checked_*` operations are overflow-free by construction.
 pub const MAX_INVOICE_AMOUNT: i128 = i128::MAX / 10_000;
 
-
 /// Upper bound on [`LiquifactEscrow::fund_batch`] entries to keep storage/CPU bounded.
 /// Mirrors the spirit of `MAX_ATTESTATION_APPEND_ENTRIES` to limit per-call work.
 pub const MAX_FUND_BATCH: u32 = 50;
@@ -2117,7 +2116,6 @@ impl LiquifactEscrow {
         result
     }
 
-
     /// Pro-rata denominator captured when the escrow first became **funded**; [`None`] until then.
     ///
     /// The snapshot is write-once. It records the full `funded_amount` at the threshold-crossing
@@ -2294,7 +2292,11 @@ impl LiquifactEscrow {
             .instance()
             .get(&DataKey::AttestationAppendLog)
             .unwrap_or_else(|| Vec::new(&env));
-        ensure(&env, index < log.len(), EscrowError::AttestationIndexOutOfRange);
+        ensure(
+            &env,
+            index < log.len(),
+            EscrowError::AttestationIndexOutOfRange,
+        );
         ensure(
             &env,
             env.storage()
@@ -3149,7 +3151,11 @@ impl LiquifactEscrow {
                 Self::set_persistent_investor_claim_not_before(&env, investor.clone(), 0u64);
             }
         } else {
-            Self::set_persistent_investor_effective_yield(&env, investor.clone(), investor_effective_yield_bps);
+            Self::set_persistent_investor_effective_yield(
+                &env,
+                investor.clone(),
+                investor_effective_yield_bps,
+            );
             Self::set_persistent_investor_claim_not_before(&env, investor.clone(), claim_nb);
         }
 
@@ -3991,11 +3997,6 @@ impl LiquifactEscrow {
 
 #[cfg(test)]
 mod test_allowlist_tests;
-#[cfg(test)]
-mod test;
-
-#[cfg(test)]
-mod tests;
 
 #[cfg(any(test, feature = "testutils"))]
 #[soroban_sdk::contract]
@@ -4006,14 +4007,29 @@ pub struct DefaultMockToken;
 impl DefaultMockToken {
     pub fn balance(env: soroban_sdk::Env, addr: soroban_sdk::Address) -> i128 {
         let key = soroban_sdk::symbol_short!("balances");
-        let mut balances: soroban_sdk::Map<soroban_sdk::Address, i128> = env.storage().instance().get(&key).unwrap_or_else(|| soroban_sdk::Map::new(&env));
+        let mut balances: soroban_sdk::Map<soroban_sdk::Address, i128> = env
+            .storage()
+            .instance()
+            .get(&key)
+            .unwrap_or_else(|| soroban_sdk::Map::new(&env));
         balances.get(addr).unwrap_or(100_000_000_000_000i128)
     }
 
-    pub fn transfer(env: soroban_sdk::Env, from: soroban_sdk::Address, to: soroban_sdk::Address, amount: i128) {
+    pub fn transfer(
+        env: soroban_sdk::Env,
+        from: soroban_sdk::Address,
+        to: soroban_sdk::Address,
+        amount: i128,
+    ) {
         let key = soroban_sdk::symbol_short!("balances");
-        let mut balances: soroban_sdk::Map<soroban_sdk::Address, i128> = env.storage().instance().get(&key).unwrap_or_else(|| soroban_sdk::Map::new(&env));
-        let from_bal = balances.get(from.clone()).unwrap_or(100_000_000_000_000i128);
+        let mut balances: soroban_sdk::Map<soroban_sdk::Address, i128> = env
+            .storage()
+            .instance()
+            .get(&key)
+            .unwrap_or_else(|| soroban_sdk::Map::new(&env));
+        let from_bal = balances
+            .get(from.clone())
+            .unwrap_or(100_000_000_000_000i128);
         let to_bal = balances.get(to.clone()).unwrap_or(100_000_000_000_000i128);
         balances.set(from.clone(), from_bal - amount);
         balances.set(to.clone(), to_bal + amount);
