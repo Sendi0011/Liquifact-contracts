@@ -118,8 +118,8 @@ fn init_funded_with_real_token<'a>(
         &None,
         &None,
     );
+    sac_admin.mint(investor, &TARGET);
     client.fund(investor, &TARGET);
-    sac_admin.mint(&escrow_id, &TARGET);
     (client, escrow_id)
 }
 
@@ -167,6 +167,8 @@ fn init_settled<'a>(
         &None,
         &None,
     );
+    let sac_admin = StellarAssetClient::new(env, &token);
+    sac_admin.mint(investor, &TARGET);
     client.fund(investor, &TARGET);
     client.settle();
     (client, escrow_id, token, treasury)
@@ -755,8 +757,10 @@ fn single_hold_blocks_all_gated_ops() {
         let investor = Address::generate(&env);
         init_funded(&client, &env, &admin, &sme, &investor, "LHG001");
         client.set_legal_hold(&true);
-        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| client.settle()));
-        assert!(r.is_err(), "settle must be blocked under hold");
+        crate::tests::assert_contract_error(
+            client.try_settle(),
+            crate::EscrowError::LegalHoldBlocksSettlement,
+        );
     }
     // withdraw
     {
@@ -765,8 +769,10 @@ fn single_hold_blocks_all_gated_ops() {
         let investor = Address::generate(&env);
         init_funded(&client, &env, &admin, &sme, &investor, "LHG002");
         client.set_legal_hold(&true);
-        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| client.withdraw()));
-        assert!(r.is_err(), "withdraw must be blocked under hold");
+        crate::tests::assert_contract_error(
+            client.try_withdraw(),
+            crate::EscrowError::LegalHoldBlocksWithdrawal,
+        );
     }
     // claim_investor_payout
     {
@@ -776,10 +782,10 @@ fn single_hold_blocks_all_gated_ops() {
         init_funded(&client, &env, &admin, &sme, &investor, "LHG003");
         client.settle();
         client.set_legal_hold(&true);
-        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            client.claim_investor_payout(&investor)
-        }));
-        assert!(r.is_err(), "claim must be blocked under hold");
+        crate::tests::assert_contract_error(
+            client.try_claim_investor_payout(&investor),
+            crate::EscrowError::LegalHoldBlocksInvestorClaims,
+        );
     }
     // sweep_terminal_dust
     {
@@ -793,9 +799,197 @@ fn single_hold_blocks_all_gated_ops() {
         let stellar = StellarAssetClient::new(&env, &token);
         stellar.mint(&escrow_id, &1_000i128);
         client.set_legal_hold(&true);
-        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            client.sweep_terminal_dust(&1_000i128)
-        }));
-        assert!(r.is_err(), "sweep must be blocked under hold");
+        crate::tests::assert_contract_error(
+            client.try_sweep_terminal_dust(&1_000i128),
+            crate::EscrowError::LegalHoldBlocksTreasuryDustSweep,
+        );
     }
+}
+
+// ── 16. Typed-error timing: delay window enforcement ─────────────────────────
+
+/// Calling `set_legal_hold(false)` (or `clear_legal_hold`) without a prior
+/// `request_clear_legal_hold` must emit [`EscrowError::LegalHoldClearRequestMissing`]
+/// when a non-zero clear delay is configured.
+///
+/// Security invariant: the delay cannot be bypassed by skipping the request step.
+#[test]
+fn clear_without_request_emits_clear_request_missing() {
+    let env = Env::default();
+    let (client, admin, sme) = setup(&env);
+    init_open_with_clear_delay(&client, &env, &admin, &sme, "LHT001", Some(100));
+    client.set_legal_hold(&true);
+
+    // No request_clear_legal_hold call — direct clear must fail with the typed error.
+    assert_contract_error(
+        client.try_set_legal_hold(&false),
+        EscrowError::LegalHoldClearRequestMissing,
+    );
+    // Hold must still be active: no partial state mutation.
+    assert!(client.get_legal_hold());
+}
+
+/// One ledger-second before `clearable_at`, `set_legal_hold(false)` must emit
+/// [`EscrowError::LegalHoldClearNotReady`].
+///
+/// Security invariant: even a single-tick early attempt is rejected.
+#[test]
+fn clear_one_ledger_before_clearable_at_emits_clear_not_ready() {
+    let env = Env::default();
+    let (client, admin, sme) = setup(&env);
+    let delay: u64 = 100;
+    init_open_with_clear_delay(&client, &env, &admin, &sme, "LHT002", Some(delay));
+    client.set_legal_hold(&true);
+    client.request_clear_legal_hold();
+
+    let clearable_at = client
+        .get_legal_hold_clearable_at()
+        .expect("clearable_at set");
+    // Advance to one second before the boundary.
+    env.ledger().set_timestamp(clearable_at - 1);
+
+    assert_contract_error(
+        client.try_set_legal_hold(&false),
+        EscrowError::LegalHoldClearNotReady,
+    );
+    // Hold is still active.
+    assert!(client.get_legal_hold());
+}
+
+/// At exactly `clearable_at`, `set_legal_hold(false)` must succeed.
+///
+/// Boundary condition: `now >= clearable_at` is inclusive — the tick at which
+/// the delay expires is valid.
+#[test]
+fn clear_at_exact_clearable_at_succeeds() {
+    let env = Env::default();
+    let (client, admin, sme) = setup(&env);
+    let delay: u64 = 100;
+    init_open_with_clear_delay(&client, &env, &admin, &sme, "LHT003", Some(delay));
+    client.set_legal_hold(&true);
+    client.request_clear_legal_hold();
+
+    let clearable_at = client
+        .get_legal_hold_clearable_at()
+        .expect("clearable_at set");
+    env.ledger().set_timestamp(clearable_at);
+
+    client.set_legal_hold(&false);
+    assert!(!client.get_legal_hold());
+    // LegalHoldClearableAt key must be cleaned up after a successful clear.
+    assert!(client.get_legal_hold_clearable_at().is_none());
+}
+
+// ── 17. Zero-delay boundary ───────────────────────────────────────────────────
+
+/// When `legal_hold_clear_delay` is 0, `request_clear_legal_hold` followed
+/// immediately by `set_legal_hold(false)` (same ledger timestamp) must succeed.
+///
+/// The zero-delay case must not require any ledger advancement.
+#[test]
+fn zero_delay_request_then_immediate_clear_succeeds() {
+    let env = Env::default();
+    let (client, admin, sme) = setup(&env);
+    init_open_with_clear_delay(&client, &env, &admin, &sme, "LHT004", Some(0));
+    client.set_legal_hold(&true);
+
+    client.request_clear_legal_hold();
+    // clearable_at == now (no advancement needed).
+    let clearable_at = client
+        .get_legal_hold_clearable_at()
+        .expect("clearable_at set");
+    assert_eq!(clearable_at, env.ledger().timestamp());
+
+    // No ledger advance — same timestamp must be accepted.
+    client.set_legal_hold(&false);
+    assert!(!client.get_legal_hold());
+}
+
+// ── 18. Admin-handover recovery scenario ─────────────────────────────────────
+
+/// Full recovery path:
+///   1. Admin sets hold (all risk-bearing ops blocked).
+///   2. Admin proposes a new admin; new admin accepts (hold persists).
+///   3. New admin clears the hold.
+///   4. `settle`, `withdraw`, and `claim_investor_payout` all resume.
+///
+/// This covers the documented funds-safety recovery lever described in
+/// `docs/escrow-legal-hold.md` §"Failure mode: hold + lost admin key".
+#[test]
+fn recovery_new_admin_clears_hold_and_operations_resume() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let sme = Address::generate(&env);
+    let investor = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+
+    // --- Setup: funded escrow with real token so withdraw() can transfer. ---
+    let sac = env.register_stellar_asset_contract_v2(Address::generate(&env));
+    let token_id = sac.address();
+    let sac_admin = StellarAssetClient::new(&env, &token_id);
+    let treasury = Address::generate(&env);
+    let escrow_id = env.register(crate::LiquifactEscrow, ());
+    let client = LiquifactEscrowClient::new(&env, &escrow_id);
+
+    client.init(
+        &admin,
+        &soroban_sdk::String::from_str(&env, "LHR010"),
+        &sme,
+        &TARGET,
+        &800i64,
+        &0u64,
+        &token_id,
+        &None,
+        &treasury,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+    );
+    sac_admin.mint(&investor, &TARGET);
+    client.fund(&investor, &TARGET);
+    // Mint yield portion so claim_investor_payout can transfer principal + yield.
+    let yield_amount = TARGET * 800 / 10_000;
+    sac_admin.mint(&escrow_id, &yield_amount);
+
+    // --- Step 1: activate hold — settle is now blocked. ---
+    client.set_legal_hold(&true);
+    assert!(client.get_legal_hold());
+    assert_contract_error(client.try_settle(), EscrowError::LegalHoldBlocksSettlement);
+
+    // --- Step 2: propose + accept new admin while hold is active. ---
+    // propose_admin and accept_admin are NOT gated by the hold (by design).
+    client.propose_admin(&new_admin);
+    assert_eq!(client.get_pending_admin(), Some(new_admin.clone()));
+    client.accept_admin();
+    // Hold persists after handover.
+    assert!(client.get_legal_hold());
+    assert_eq!(client.get_escrow().admin, new_admin);
+
+    // Risk-bearing ops remain blocked even though admin changed.
+    assert_contract_error(client.try_settle(), EscrowError::LegalHoldBlocksSettlement);
+    assert_contract_error(
+        client.try_withdraw(),
+        EscrowError::LegalHoldBlocksWithdrawal,
+    );
+    assert_contract_error(
+        client.try_claim_investor_payout(&investor),
+        EscrowError::LegalHoldBlocksInvestorClaims,
+    );
+
+    // --- Step 3: new admin clears the hold. ---
+    client.clear_legal_hold();
+    assert!(!client.get_legal_hold());
+
+    // --- Step 4: operations resume. ---
+    // settle transitions funded(1) → settled(2); withdraw requires status=1
+    // so we verify settle first, then demonstrate claim on the settled escrow.
+    let settled = client.settle();
+    assert_eq!(settled.status, 2);
+
+    client.claim_investor_payout(&investor);
+    assert!(client.is_investor_claimed(&investor));
 }

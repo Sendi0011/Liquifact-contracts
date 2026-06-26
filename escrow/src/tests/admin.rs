@@ -337,6 +337,106 @@ fn test_propose_admin_emits_event() {
     );
 }
 
+/// Assert `propose_admin` requires current-admin auth
+#[test]
+#[should_panic]
+fn test_propose_admin_requires_current_admin_auth() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let sme = Address::generate(&env);
+    let client = deploy(&env);
+    default_init(&client, &env, &admin, &sme);
+    env.mock_auths(&[]);
+    let new_admin = Address::generate(&env);
+    client.propose_admin(&new_admin);
+}
+
+/// Assert `propose_admin` rejects `NewAdminSameAsCurrent`
+#[test]
+#[should_panic]
+fn test_propose_admin_same_address_panics() {
+    let env = Env::default();
+    let (client, admin, sme) = setup(&env);
+    default_init(&client, &env, &admin, &sme);
+    client.propose_admin(&admin);
+}
+
+/// Assert `accept_admin` by wrong address panics
+#[test]
+#[should_panic]
+fn test_accept_admin_by_wrong_address_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, sme) = setup(&env);
+    let new_admin = Address::generate(&env);
+    default_init(&client, &env, &admin, &sme);
+    client.propose_admin(&new_admin);
+    let wrong_admin = Address::generate(&env);
+    env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+        address: &wrong_admin,
+        invoke: &soroban_sdk::testutils::MockAuthInvoke {
+            contract: &client.address,
+            fn_name: "accept_admin",
+            args: soroban_sdk::Vec::<soroban_sdk::Val>::new(&env),
+            sub_invokes: &[],
+        },
+    }]);
+    client.accept_admin();
+}
+
+/// End-to-end handover lifecycle: propose, accept, old admin lockout, new admin authority
+#[test]
+fn test_admin_handover_lifecycle() {
+    use soroban_sdk::testutils::Events as _;
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, old_admin, sme) = setup(&env);
+    let new_admin = Address::generate(&env);
+    default_init(&client, &env, &old_admin, &sme);
+
+    // 1. Propose admin
+    let pending = client.propose_admin(&new_admin);
+    assert_eq!(pending, new_admin.clone());
+    assert_eq!(client.get_pending_admin(), Some(new_admin.clone()));
+
+    // 2. Accept admin (verifying the events)
+    let contract_id = client.address.clone();
+    let updated = client.accept_admin();
+    assert_eq!(updated.admin, new_admin.clone());
+    assert_eq!(client.get_pending_admin(), None);
+
+    // Verify AdminTransferredEvent
+    assert_eq!(
+        env.events().all().events().last().unwrap().clone(),
+        crate::AdminTransferredEvent {
+            name: symbol_short!("admin"),
+            invoice_id: client.get_escrow().invoice_id,
+            new_admin: new_admin.clone(),
+        }
+        .to_xdr(&env, &contract_id)
+    );
+
+    // 3. New admin can perform admin-gated actions
+    let latest = client.update_funding_target(&20_000i128);
+    assert_eq!(latest.funding_target, 20_000i128);
+
+    // 4. Old admin can no longer perform admin-gated actions
+    env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+        address: &old_admin,
+        invoke: &soroban_sdk::testutils::MockAuthInvoke {
+            contract: &client.address,
+            fn_name: "update_funding_target",
+            args: soroban_sdk::Vec::<soroban_sdk::Val>::new(&env),
+            sub_invokes: &[],
+        },
+    }]);
+    assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        client.update_funding_target(&30_000i128);
+    }))
+    .is_err());
+}
+
 #[test]
 #[should_panic]
 fn test_migrate_at_current_version_panics() {
