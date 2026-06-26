@@ -3085,6 +3085,28 @@ impl LiquifactEscrow {
         .publish(&env);
     }
 
+    /// Checked coupon math for settlement reporting.
+    fn settlement_coupon(env: &Env, total_principal: i128, yield_bps: i64) -> i128 {
+        total_principal
+            .checked_mul(yield_bps as i128)
+            .unwrap_or_else(|| fail(env, EscrowError::ComputePayoutArithmeticOverflow))
+            .checked_div(10_000)
+            .unwrap_or_else(|| fail(env, EscrowError::ComputePayoutArithmeticOverflow))
+    }
+
+    /// Checked investor gross payout arithmetic.
+    fn gross_payout(env: &Env, contribution: i128, total_principal: i128, yield_bps: i64) -> i128 {
+        let coupon = Self::settlement_coupon(env, total_principal, yield_bps);
+        let settle_pool = total_principal
+            .checked_add(coupon)
+            .unwrap_or_else(|| fail(env, EscrowError::ComputePayoutArithmeticOverflow));
+        contribution
+            .checked_mul(settle_pool)
+            .unwrap_or_else(|| fail(env, EscrowError::ComputePayoutArithmeticOverflow))
+            .checked_div(total_principal)
+            .unwrap_or_else(|| fail(env, EscrowError::ComputePayoutArithmeticOverflow))
+    }
+
     /// On-chain read-only pro-rata gross payout for `investor`.
     ///
     /// Derives the **gross payout** (principal share plus `InvestorEffectiveYield`-adjusted
@@ -3148,23 +3170,7 @@ impl LiquifactEscrow {
             Self::get_persistent_investor_effective_yield(&env, investor.clone())
                 .unwrap_or(escrow.yield_bps);
 
-        // coupon = total_principal × effective_yield_bps / 10_000  (floor)
-        let coupon = total_principal
-            .checked_mul(effective_yield_bps as i128)
-            .unwrap_or_else(|| fail(&env, EscrowError::ComputePayoutArithmeticOverflow))
-            .checked_div(10_000)
-            .unwrap_or_else(|| fail(&env, EscrowError::ComputePayoutArithmeticOverflow));
-
-        let settle_pool = total_principal
-            .checked_add(coupon)
-            .unwrap_or_else(|| fail(&env, EscrowError::ComputePayoutArithmeticOverflow));
-
-        // gross_payout = contribution × settle_pool / total_principal  (floor)
-        contribution
-            .checked_mul(settle_pool)
-            .unwrap_or_else(|| fail(&env, EscrowError::ComputePayoutArithmeticOverflow))
-            .checked_div(total_principal)
-            .unwrap_or_else(|| fail(&env, EscrowError::ComputePayoutArithmeticOverflow))
+        Self::gross_payout(&env, contribution, total_principal, effective_yield_bps)
     }
 
     pub fn update_maturity(env: Env, new_maturity: u64) -> InvoiceEscrow {
