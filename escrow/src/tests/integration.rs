@@ -903,6 +903,101 @@ fn setup_withdraw_with_token<'a>(
     (client, escrow_id, token, sme)
 }
 
+/// Cancel -> partial refund -> sweep liability-floor lifecycle.
+///
+/// Steps:
+/// 1. Init escrow with a real SAC token and fund by multiple investors (remain Open).
+/// 2. Mint `funded_amount + extra_dust` into the contract to simulate stray tokens.
+/// 3. Admin `cancel_funding` -> status 4 (cancelled).
+/// 4. One investor calls `refund` (distributed_principal increments).
+/// 5. Attempt a sweep larger than the extra dust fails (liability floor enforced).
+/// 6. Sweep up to the extra dust succeeds and transfers to treasury.
+/// 7. Double-refund of same investor panics with `NoContributionToRefund` behavior.
+#[test]
+fn test_cancel_refund_sweep_liability_floor() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let sac = install_stellar_asset_token(&env);
+    use crate::LiquifactEscrow;
+
+    // Deploy escrow instance bound to the SAC token
+    let escrow_id = env.register(LiquifactEscrow, ());
+    let client = LiquifactEscrowClient::new(&env, &escrow_id);
+    let admin = Address::generate(&env);
+    let sme = Address::generate(&env);
+    let treasury = Address::generate(&env);
+
+    // Small target so test numbers are easy to reason about
+    let target = 1_000_000i128;
+    client.init(
+        &admin,
+        &soroban_sdk::String::from_str(&env, "CANREF001"),
+        &sme,
+        &target,
+        &800i64,
+        &0u64,
+        &sac.id,
+        &None,
+        &treasury,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+    );
+
+    // Two investors fund while escrow remains OPEN (status 0)
+    let inv1 = Address::generate(&env);
+    let inv2 = Address::generate(&env);
+    let a1 = 200_000i128;
+    let a2 = 300_000i128;
+    client.fund(&inv1, &a1);
+    client.fund(&inv2, &a2);
+    let total = a1 + a2;
+    assert_eq!(client.get_escrow().funded_amount, total);
+
+    // Mint funded_amount + extra dust into the escrow contract
+    let extra = 50_000i128;
+    sac.stellar.mint(&escrow_id, &(total + extra));
+
+    // Cancel funding (admin)
+    client.cancel_funding();
+    assert_eq!(client.get_escrow().status, 4u32);
+
+    // Refund inv1: should succeed, mark refunded, and increment DistributedPrincipal
+    client.refund(&inv1);
+    assert!(client.is_investor_refunded(&inv1));
+    assert_eq!(client.get_distributed_principal(), a1);
+
+    // Double-refund for inv1 must panic (no contribution to refund)
+    let dup_refund = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        client.refund(&inv1);
+    }));
+    assert!(dup_refund.is_err(), "double-refund must panic");
+
+    // Attempt sweep larger than allowed extra must fail (liability floor)
+    let too_large = extra + 1i128;
+    let sweep_fail = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        client.sweep_terminal_dust(&too_large);
+    }));
+    assert!(
+        sweep_fail.is_err(),
+        "sweep exceeding extra dust must be blocked"
+    );
+
+    // Sweep exactly the extra dust should succeed and transfer to treasury
+    let swept = client.sweep_terminal_dust(&extra);
+    assert_eq!(swept, extra);
+    assert_eq!(sac.token.balance(&treasury), extra);
+
+    // Refund remaining investor to complete distributed principal accounting
+    client.refund(&inv2);
+    assert!(client.is_investor_refunded(&inv2));
+    assert_eq!(client.get_distributed_principal(), total);
+}
+
 /// SME receives exactly `funded_amount` tokens and the escrow contract balance
 /// drops to zero after a successful `withdraw`.
 #[test]
@@ -1107,8 +1202,8 @@ fn withdraw_event_includes_recipient() {
     }
     .to_xdr(&env, &escrow_id);
 
-    let filtered = all_events.filter_by_contract(&escrow_id);
-    let found = filtered.events().contains(&expected_xdr);
+    let all_events = env.events().all().filter_by_contract(&escrow_id);
+    let found = all_events.events().iter().any(|e| *e == expected_xdr);
     assert!(
         found,
         "SmeWithdrew event with correct recipient and amount must be emitted"

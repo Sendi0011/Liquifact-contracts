@@ -816,31 +816,7 @@ fn test_update_funding_target_fails_when_settled() {
 fn test_update_funding_target_fails_when_withdrawn() {
     let env = Env::default();
     env.mock_all_auths();
-    let admin = Address::generate(&env);
-    let sme = Address::generate(&env);
-    let investor = Address::generate(&env);
-    let client = deploy(&env);
-
-    let token = Address::generate(&env);
-    let treasury = Address::generate(&env);
-    client.init(
-        &admin,
-        &soroban_sdk::String::from_str(&env, "WD001"),
-        &sme,
-        &5_000i128,
-        &800i64,
-        &0u64,
-        &token,
-        &None,
-        &treasury,
-        &None,
-        &None,
-        &None,
-        &None,
-        &None,
-        &None,
-    );
-    client.fund(&investor, &5_000i128); // status → 1 (funded)
+    let (client, _escrow_id, _sme) = init_and_fund_with_real_token(&env, 5_000i128, "WD001");
     client.withdraw(); // status → 3 (withdrawn)
     client.update_funding_target(&6_000i128);
 }
@@ -1056,31 +1032,7 @@ fn test_update_maturity_fails_when_settled() {
 fn test_update_maturity_fails_when_withdrawn() {
     let env = Env::default();
     env.mock_all_auths();
-    let admin = Address::generate(&env);
-    let sme = Address::generate(&env);
-    let investor = Address::generate(&env);
-    let client = deploy(&env);
-
-    let token = Address::generate(&env);
-    let treasury = Address::generate(&env);
-    client.init(
-        &admin,
-        &soroban_sdk::String::from_str(&env, "MAT004"),
-        &sme,
-        &5_000i128,
-        &800i64,
-        &0u64,
-        &token,
-        &None,
-        &treasury,
-        &None,
-        &None,
-        &None,
-        &None,
-        &None,
-        &None,
-    );
-    client.fund(&investor, &5_000i128); // status → 1
+    let (client, _escrow_id, _sme) = init_and_fund_with_real_token(&env, 5_000i128, "MAT004");
     client.withdraw(); // status → 3
     client.update_maturity(&2000u64);
 }
