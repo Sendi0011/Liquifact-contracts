@@ -175,7 +175,7 @@ proptest! {
         let (token, treasury) = free_addresses(&env);
 
         let max_per_investor = if caps_present { Some(per_inv_cap.min(funding_target)) } else { None };
-        let max_unique_investors: Option<u64> = if caps_present { Some(uniq_cap.min(6) as u64) } else { None };
+        let max_unique_investors: Option<u32> = if caps_present { Some(uniq_cap.min(6) as u32) } else { None };
 
         // Optional tiered yield is not required for these invariants; keep it off.
         client.init(
@@ -192,6 +192,7 @@ proptest! {
             &None,
             &max_unique_investors,
             &max_per_investor,
+            &None,
             &None,
         );
 
@@ -238,7 +239,7 @@ proptest! {
             }
             if expected_contribs[ix] == 0 {
                 if let Some(uc) = max_unique_investors {
-                    if distinct_funders.len() as u64 >= uc {
+                    if distinct_funders.len() as u32 >= uc {
                         break;
                     }
                 }
@@ -285,7 +286,7 @@ proptest! {
                 prop_assert!(expected_contribs[ix] <= cap);
             }
             if let Some(uc) = max_unique_investors {
-                prop_assert!(distinct_funders.len() as u64 <= uc);
+                prop_assert!(distinct_funders.len() as u32 <= uc);
             }
 
             // Invariant: status flip correctness.
@@ -448,6 +449,7 @@ fn prop_status_withdraw_transition() {
         &None,
     );
 
+    token.stellar.mint(&investor, &target);
     client.fund(&investor, &target);
     token.stellar.mint(&client.address.clone(), &target);
 
@@ -530,6 +532,7 @@ fn prop_no_regression_after_withdraw() {
         &None,
     );
 
+    token.stellar.mint(&investor, &target);
     client.fund(&investor, &target);
     token.stellar.mint(&client.address.clone(), &target);
     let withdrawn = client.withdraw();
@@ -604,6 +607,7 @@ fn prop_withdrawn_is_terminal_for_withdraw() {
         &None,
     );
 
+    token.stellar.mint(&investor, &target);
     client.fund(&investor, &target);
     token.stellar.mint(&client.address.clone(), &target);
     client.withdraw();
@@ -1522,17 +1526,19 @@ fn cancelled_escrow<'a>(
     let sme = Address::generate(env);
     let (token, treasury) = free_addresses(env);
     let total: i128 = contributions.iter().map(|(_, a)| a).sum();
+    // Target must exceed total so fund() leaves status at 0 (open), allowing cancel_funding.
+    let target = total + 1_000_000_000;
     client.init(
         &admin,
         &soroban_sdk::String::from_str(env, invoice_id),
-        &sme, &total, &800i64, &0u64,
+        &sme, &target, &800i64, &0u64,
         &token, &None, &treasury, &None,
         &None, &None, &None, &None, &None,
     );
     for (investor, amount) in contributions {
         client.fund(investor, amount);
     }
-    client.cancel();
+    client.cancel_funding();
     client
 }
 
@@ -1552,7 +1558,7 @@ fn dust_sweep_after_full_refund_allows_sweep_to_zero() {
     let investor = Address::generate(&env);
     let amount = 50_000i128;
     let client = cancelled_escrow(&env, "DUST02", &[(investor.clone(), amount)]);
-    client.refund(&investor, &amount);
+    client.refund(&investor);
     assert_eq!(client.get_escrow().status, 4);
 }
 
@@ -1562,7 +1568,7 @@ fn fuzz_dust_sweep_liability_floor() {
         .ok().and_then(|v| v.parse().ok()).unwrap_or(32);
     let base_seed = read_fuzz_seed_u64();
     for case_idx in 0..cases {
-        let case_seed = base_seed ^ (case_idx as u64).wrapping_mul(0xD0575W33P0001u64);
+        let case_seed = base_seed ^ (case_idx as u64).wrapping_mul(0xD0575_0000_0001u64);
         let mut rng = SplitMix64::new(case_seed);
         let env = Env::default();
         env.mock_all_auths();
@@ -1586,7 +1592,7 @@ fn fuzz_dust_sweep_liability_floor() {
             let idx = order[i];
             let ra = rng.gen_i128_inclusive(0, amounts[idx]);
             if ra > 0 {
-                client.refund(&investors[idx], &ra);
+                client.refund(&investors[idx]);
                 distributed = distributed.checked_add(ra).expect("overflow");
             }
         }

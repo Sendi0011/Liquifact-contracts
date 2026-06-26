@@ -54,8 +54,6 @@ fn init_open(
         &None,
         &None,
         &None,
-        &None,
-        &None,
     );
     (token, treasury)
 }
@@ -86,7 +84,6 @@ fn init_open_with_clear_delay(
         &None,
         &None,
         &legal_hold_clear_delay,
-        &None,
         &None,
     );
     (token, treasury)
@@ -123,11 +120,9 @@ fn init_funded_with_real_token<'a>(
         &None,
         &None,
         &None,
-        &None,
-        &None,
     );
+    sac_admin.mint(investor, &TARGET);
     client.fund(investor, &TARGET);
-    sac_admin.mint(&escrow_id, &TARGET);
     (client, escrow_id)
 }
 
@@ -174,9 +169,9 @@ fn init_settled<'a>(
         &None,
         &None,
         &None,
-        &None,
-        &None,
     );
+    let sac_admin = StellarAssetClient::new(env, &token);
+    sac_admin.mint(investor, &TARGET);
     client.fund(investor, &TARGET);
     client.settle();
     (client, escrow_id, token, treasury)
@@ -710,8 +705,10 @@ fn single_hold_blocks_all_gated_ops() {
         let investor = Address::generate(&env);
         init_funded(&client, &env, &admin, &sme, &investor, "LHG001");
         client.set_legal_hold(&true);
-        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| client.settle()));
-        assert!(r.is_err(), "settle must be blocked under hold");
+        crate::tests::assert_contract_error(
+            client.try_settle(),
+            crate::EscrowError::LegalHoldBlocksSettlement,
+        );
     }
     // withdraw
     {
@@ -720,8 +717,10 @@ fn single_hold_blocks_all_gated_ops() {
         let investor = Address::generate(&env);
         init_funded(&client, &env, &admin, &sme, &investor, "LHG002");
         client.set_legal_hold(&true);
-        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| client.withdraw()));
-        assert!(r.is_err(), "withdraw must be blocked under hold");
+        crate::tests::assert_contract_error(
+            client.try_withdraw(),
+            crate::EscrowError::LegalHoldBlocksWithdrawal,
+        );
     }
     // claim_investor_payout
     {
@@ -731,10 +730,10 @@ fn single_hold_blocks_all_gated_ops() {
         init_funded(&client, &env, &admin, &sme, &investor, "LHG003");
         client.settle();
         client.set_legal_hold(&true);
-        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            client.claim_investor_payout(&investor)
-        }));
-        assert!(r.is_err(), "claim must be blocked under hold");
+        crate::tests::assert_contract_error(
+            client.try_claim_investor_payout(&investor),
+            crate::EscrowError::LegalHoldBlocksInvestorClaims,
+        );
     }
     // sweep_terminal_dust
     {
@@ -748,10 +747,10 @@ fn single_hold_blocks_all_gated_ops() {
         let stellar = StellarAssetClient::new(&env, &token);
         stellar.mint(&escrow_id, &1_000i128);
         client.set_legal_hold(&true);
-        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            client.sweep_terminal_dust(&1_000i128)
-        }));
-        assert!(r.is_err(), "sweep must be blocked under hold");
+        crate::tests::assert_contract_error(
+            client.try_sweep_terminal_dust(&1_000i128),
+            crate::EscrowError::LegalHoldBlocksTreasuryDustSweep,
+        );
     }
 }
 
@@ -898,9 +897,11 @@ fn recovery_new_admin_clears_hold_and_operations_resume() {
         &None,
         &None,
     );
+    sac_admin.mint(&investor, &TARGET);
     client.fund(&investor, &TARGET);
-    // Mint tokens into the escrow so withdraw() can actually transfer them.
-    sac_admin.mint(&escrow_id, &TARGET);
+    // Mint yield portion so claim_investor_payout can transfer principal + yield.
+    let yield_amount = TARGET * 800 / 10_000;
+    sac_admin.mint(&escrow_id, &yield_amount);
 
     // --- Step 1: activate hold — settle is now blocked. ---
     client.set_legal_hold(&true);
