@@ -248,6 +248,15 @@ external token contracts.
 
 ---
 
+## SEP-41 token-safety wrappers
+
+See [`docs/escrow-token-safety.md`](docs/escrow-token-safety.md) for the threat model,
+invariants, and error codes (`EscrowError` codes 36–41) for the funding-token
+transfer wrapper `transfer_funding_token_with_balance_checks`. The wrapper detects
+fee-on-transfer, rebasing, hook, and lying token behaviors at the host-call boundary.
+
+---
+
 ## SME collateral metadata
 
 See [`docs/escrow-sme-collateral.md`](docs/escrow-sme-collateral.md) for the risk-team handling rules for `record_sme_collateral_commitment` and `CollateralRecordedEvt`. The record is SME-reported metadata only; it is not proof of custody, token movement, or an enforceable on-chain claim.
